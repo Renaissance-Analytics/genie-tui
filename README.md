@@ -42,11 +42,32 @@ justification for the whole project, and it is the thing the tests assert.
 The dependency rule: `protocol` and `reduce` import nothing; `ui` and `bridge`
 import `protocol` but never Mastra. Upstream churn lands in `adapter/` alone.
 
+## Local models first
+
+The product constraint is **local models first, cloud as the fallback**, and
+`src/__tests__/local-endpoint.test.ts` proves it rather than asserting it: it
+stands up a real OpenAI-compatible server on an ephemeral port and drives a full
+turn against it with the object form —
+
+```ts
+model: { id: 'local/test-model', url: 'http://127.0.0.1:<port>/v1' }
+```
+
+— which is the shape Ollama, llama.cpp, LM Studio and vLLM all speak. No API
+key, no model download, no network egress, so it runs identically on every OS in
+CI. Its third case points at a dead port and requires the turn to FAIL, which is
+what stops the other two passing for the wrong reason.
+
+Two limits worth knowing, both in [`GAPS.md`](GAPS.md): Mastra has no `ollama`
+provider id, and `session.model.switch()` takes a string, so a URL cannot be
+carried — **runtime** model switching to a local endpoint needs a custom
+`MastraModelGateway`.
+
 ## Run
 
 ```bash
 npm install
-npm test          # 59 tests
+npm test          # 62 tests
 npm run typecheck
 
 npx tsx src/cli.tsx --print                      # non-interactive smoke
@@ -73,6 +94,13 @@ this takes the easy path deliberately.
 
 Genie does not accept the state report yet — `agentinbox` has no `reportState`
 action. See GAPS.md §G1 for the live probe and the exact frame it would need.
+
+## CI
+
+Every push runs the suite on **ubuntu / macOS / windows × Node 22.13 and 24**.
+Genie spawns this in a pty on all three, so all three are a requirement, not a
+courtesy. The repository is public so that matrix is free — Actions is metered on
+private repos and macOS runners bill at a 10x multiplier.
 
 ## Tests
 

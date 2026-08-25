@@ -25,5 +25,14 @@
     },
     "bin": {
         "genie-tui": "./dist/cli.js"
+    },
+    "description": "Genie's first-party coding-agent harness — a TUI provider on Mastra and fancy-tui, optimised for local models.",
+    "license": "SEE LICENSE IN LICENSE",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Renaissance-Analytics/genie-tui.git"
+    },
+    "engines": {
+        "node": ">=22.13.0"
     }
 }
