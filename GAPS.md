@@ -12,6 +12,37 @@ reconstructed afterwards.
 
 ## Mastra
 
+> ### Shelf life — read this before acting on anything below
+>
+> **Mastra is a temporary dependency with a planned exit**: the first-party
+> harness lands when the Prism language-parity packages do. That changes what
+> these findings are FOR. They are no longer a backlog of things to work around;
+> most of them are **requirements for the harness that replaces it**.
+>
+> Nothing here is filed upstream, and nothing will be — effort spent improving
+> something we are leaving is effort wasted.
+>
+> | # | finding | after the swap |
+> |---|---|---|
+> | M1 | `llm-mock` imports `vitest` | **dies.** Packaging bug, zero residual value |
+> | M2 | `agent-controller/test-utils` unexported | **dies.** Same |
+> | M3 | no token-level text delta | **REQUIREMENT** — emit `text-delta`; a terminal paints tokens, not whole messages |
+> | M4 | `displayState` shape undocumented | **dies.** Mastra-specific concept |
+> | M5 | ~50-member event union for 11 facts | **REQUIREMENT** — keep the event surface small and normalised |
+> | M6 | model ids are unvalidated strings | **REQUIREMENT** — a typed model reference |
+> | M7 | `switch()` cannot carry a URL | **REQUIREMENT** — the model reference must carry an endpoint. This is the single most consequential one for local-first |
+> | M8 | sampling params silently stripped | **REQUIREMENT** — never silently drop a user's sampling config; unknown ≠ unsupported |
+> | M9 | no context-window metadata anywhere | **REQUIREMENT** — publish it. Our model-profile table survives either way |
+> | M10 | no tool-call repair; no local schema-compat | **REQUIREMENT** — both, and they matter most on small local models |
+> | M11 | OM defaults to a cloud model | **mostly dies** (Mastra subsystem), but the lesson is a **REQUIREMENT**: no model field may default to a cloud provider |
+> | M12 | model catalogue needs the network | **REQUIREMENT** — the catalogue must work offline |
+> | M13 | ~4,050-token always-resident prompt | **REQUIREMENT** — budget the base prompt; half an 8k window is not viable |
+> | M14 | telemetry on by default | **REQUIREMENT** — off, or absent |
+>
+> Ten of fourteen are spec inputs rather than workarounds. **Adapt minimally
+> today; carry the requirement forward.** Building a deep accommodation for any
+> of these is investing in a component with a known end date.
+
 ### M1 — `@mastra/core/test-utils/llm-mock` is unusable outside vitest *(blocking, worked around)*
 
 **Tried:** `createMockModel({ mockText, version: 'v2' })` to give the CLI a
@@ -135,6 +166,14 @@ with no warning, surfacing to a user as "why is my local model incoherent".
 Workaround: use a provider id *not* in the bundled registry so the lookup returns
 `undefined` and the params survive. That is a real workaround, and an ugly one —
 correct behaviour depends on being *unknown* to the registry.
+
+**Load-bearing in the code, so do not "tidy" it:**
+`src/__tests__/local-endpoint.test.ts` uses `id: 'local/test-model'` rather than
+`lmstudio/...` *for this reason*, and the comment there says so. Renaming that
+prefix to something Mastra's registry recognises would silently strip
+`temperature`/`topP`/`topK` and the test would still pass — it asserts the turn,
+not the sampling config. The same applies to the gateway's provider id when it
+is built (§M7).
 
 ### M9 — no context-window metadata anywhere
 
