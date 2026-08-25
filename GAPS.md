@@ -5,8 +5,8 @@ here is a design gap in something — Mastra, `fancy-tui`, the Fancy backends, o
 Genie. Recorded as they were hit while building the walking skeleton, not
 reconstructed afterwards.
 
-Nothing here is filed yet. Fancy items are **issue-first** by protocol — file on
-the Fancy repo, never clone-fix-publish.
+**G0 is filed as genie#261.** Everything else is unfiled. Fancy items are
+**issue-first** by protocol — file on the Fancy repo, never clone-fix-publish.
 
 ---
 
@@ -93,7 +93,101 @@ against auto-detected provider env vars. A typo is a runtime error, and "why is
 this unauthenticated" is hard to diagnose because auth is implicit. No
 compile-time surface at all.
 
-### M7 — telemetry on by default
+### M7 — `session.model.switch()` cannot reach a local endpoint *(blocking, must build around)*
+
+**Tried:** let the user pick a local model at runtime — the owner's "local models
+first" constraint requires model choice to be a runtime concern, not a constant.
+
+**Expected:** `session.model.switch()` to accept whatever `new Agent({ model })`
+accepts, since the object form `{ id: 'ollama/x', url: 'http://localhost:11434/v1' }`
+works beautifully at construction — `url` short-circuits the whole gateway/auth
+chain and defaults `apiKey` to `''`, so a keyless local server just works.
+
+**Got:** `switch({ modelId: string, scope?, modeId? })`. **String only.** There is
+nowhere to attach a URL through `AgentController`, and `AgentControllerConfig` has
+no per-model URL map either.
+
+**Instead:** the TUI has to ship its own `MastraModelGateway` (~40 lines,
+registerable via `new AgentController({ gateways: [...] })`). Not avoidable, so
+it is budgeted as a component rather than logged as a workaround.
+
+Compounding it: **there is no `ollama` provider id at all.** The bundled
+178-provider registry has `ollama-cloud` (Mastra's paid API) and `lmstudio`;
+local Ollama is punted to a third-party AI SDK package. `'ollama/llama3.3'`
+throws *"Could not find config for provider ollama"*. And `lmstudio/*` demands
+`LMSTUDIO_API_KEY` even though the server needs no auth — a keyless local server
+is rejected with a missing-key error until you set a dummy.
+
+### M8 — sampling params are silently stripped for unlisted models *(nasty)*
+
+`stripUnsupportedSamplingParams()` deletes `temperature`, `topP` **and** `topK`
+when `modelSupportsTemperature(id)` is false — and false means *"provider known,
+model not in our list"*, not *"model rejects it"*. Measured:
+
+| model id | temperature survives |
+|---|---|
+| `lmstudio/qwen/qwen3-coder-30b` | yes — one of 3 hardcoded |
+| `lmstudio/mistral-7b-instruct` | **no — silently stripped** |
+| `llamacpp/anything` | yes — provider unknown, no lookup |
+
+So any LM Studio model outside Mastra's hardcoded three loses its sampling config
+with no warning, surfacing to a user as "why is my local model incoherent".
+Workaround: use a provider id *not* in the bundled registry so the lookup returns
+`undefined` and the params survive. That is a real workaround, and an ugly one —
+correct behaviour depends on being *unknown* to the registry.
+
+### M9 — no context-window metadata anywhere
+
+Zero `context` / `limit` / `window` keys across the 178 provider entries and 178
+capability files. Nothing in Mastra knows an 8k model is 8k, so `TokenLimiter`
+limits, `lastMessages`, and OM thresholds must all be hand-tuned per model —
+exactly the toil a local-first TUI wants automated. **Instead:** the TUI owns a
+model-profile table. Reasonable to own, but it is Mastra's data to publish.
+
+### M10 — no tool-call repair, and no schema-compat layer for local endpoints
+
+`experimental_repairToolCall` exists in the vendored AI SDK types but Mastra's
+loop never plumbs it through, so malformed tool JSON from a 7B model surfaces as
+an error chunk with no retry. `structuredOutput.jsonPromptInjection` is a genuine
+prompt-based fallback but covers **structured output, not tool calls**.
+
+Separately, `@mastra/schema-compat` has layers for Anthropic/DeepSeek/Google/
+Meta/OpenAI only. **A local model behind a generic OpenAI-compatible endpoint gets
+full unmodified Zod→JSON-Schema** — nested unions, refinements, format constraints
+— which is precisely what small models fumble. **Instead:** write our own
+`SchemaCompatLayer`. Also: `structuredOutput` capability data for local providers
+is `undefined`, so `jsonPromptInjection: 'auto'` cannot make an informed choice —
+set it explicitly.
+
+### M11 — Observational Memory defaults to a cloud call
+
+Mastra's answer to context growth is OM (compaction is explicitly *"not provided
+out of the box"*). OM runs **two background agents**, an observer and a reflector
+— so a second model on the box, contending for VRAM with the main one — and it
+**defaults to `google/gemini-2.5-flash`**. Enabling it without setting a model is
+an unrequested cloud call in a local-first product. **Instead:** off by default;
+if enabled, model set explicitly and locally.
+
+### M12 — the model catalogue needs the network
+
+`listAvailableModels()` calls each gateway's `fetchProviders()`, live against
+`https://models.dev/api.json`. `MASTRA_OFFLINE=true` prevents the fetch, but then
+the picker is limited to the bundled snapshot — which, per M7, contains no local
+Ollama entry. A fully-offline machine gets a model picker that cannot list the
+models it can actually run.
+
+### M13 — ~4,050 tokens of always-resident prompt
+
+Measured by executing `buildBasePrompt()` with a minimal context: 10,161 chars
+(~2,540 tokens), plus ~800 for six controller built-in tool descriptions, ~656 for
+ten workspace tools, ~61 for the workspace blurb — **~4,050 tokens before a single
+message**, excluding JSON schemas for 16 tools. That is half an 8k window.
+
+Not a defect — `buildBasePrompt` is a plain `(ctx) => string` and trivially
+replaceable, and `disableBuiltinTools` exists. But it means **"use Mastra's coding
+agent as-is" is not viable below ~32k context**, which is most local setups.
+
+### M14 — telemetry on by default
 
 `@mastra/core` depends on `posthog-node`. A review item before this ships in a
 product, not a bug.
@@ -184,6 +278,48 @@ absence of a throw.
 
 ## Genie
 
+### G0 — adding a provider is a ~37-site sweep, only ~11 compiler-enforced *(FILED: genie#261)*
+
+**Tried:** register `genie` as a third agent provider, expecting to add one
+`LAUNCH_PROFILES` entry — the shape the codebase advertises.
+
+**Expected:** a provider registry, or at minimum a single closed union the
+compiler would walk me through.
+
+**Got:** the provider set is a string-literal union **restated in ~37 places**,
+measured on `origin/main` @ `49fa6f2`:
+
+| category | non-test sites | compiler-enforced? |
+|---|---|---|
+| type-union restatements (`'claude' \| 'codex' \| 'custom'`) | 12 | **yes** |
+| runtime literal arrays / JSON-Schema enums | 3 | **no** |
+| per-provider hardcoded `if`/ternary branches | 17 | no |
+| `agent_command_<id>` / `agent_flags_<id>` settings keys | 52 occurrences across 12 files | no |
+
+The unenforced half is the dangerous half, because the failure is silence:
+
+- `main/agents/identity.ts:92` — `PROVIDERS` is typed `readonly string[]`, so it
+  is *deliberately* outside the union. Miss it and `isAgentProvider()` returns
+  false, which makes `savedAgentsOf` **silently skip every agent of the new
+  provider**. Nothing throws.
+- `main/mcp/protocol.ts:2047` — the `runAgent.agent` JSON-Schema enum. Miss it and
+  an agent cannot name the provider over MCP at all, whatever the types say.
+- `main/agentinbox/session-capture.ts:121,139` — `renderAgentResume` and
+  `renderAgentContinue` both `if (agent !== 'claude') return null`, so **any
+  non-Claude provider has no graceful restart**.
+- `renderer/lib/recipes/workstation-setup.ts` mirrors genie-cloud's
+  `AGENT_CATALOG` **by hand** — the sweep does not even end at this repo.
+
+There is **no provider registry and no plugin route**. `PluginContributes`
+(`main/plugins/manifest.ts`) offers `mcpTools | editors | panels | recipes`, with
+`flyouts | modals | wizards | workstationPage | workspaceSettingsPage` reserved.
+Nothing provider-shaped — so a third party cannot contribute one.
+
+**Instead:** stopped, filed **genie#261**, and did not touch Genie. The owner has
+since made the `PROVIDER_REGISTRY` refactor the *first* piece of work, ahead of
+the TUI. It must sequence behind PR #258 and Codex's harness-startup work, which
+are live in the same files.
+
 ### G1 — `agentinbox` has no `reportState` action *(the one that matters)*
 
 The whole design rests on the harness telling Genie what Genie currently infers.
@@ -262,6 +398,79 @@ same time rather than a fourth placeholder joining them.
 
 ---
 
+### G7 — the four memory classes are implemented but unreachable *(the memory one)*
+
+**Tried:** write a `procedural` memory node through Genie's `knowledge` MCP tool,
+rather than building a second store in the TUI.
+
+**Expected:** to pass `class: 'procedural'`. The store genuinely supports it —
+migration v38 added the `class` column, `store.add()` **refuses** an unknown class
+rather than coercing it, `store.search()` filters by class with over-fetch so
+narrowing does not starve `limit`, and 11 tests cover per-class isolation and
+cross-class linking. The framing is documented in `main/knowledge/types.ts:17-34`.
+
+**Got:** `class` does not exist on `KnowledgeToolRequest`, is absent from the MCP
+JSON schema — which is `additionalProperties: false`, so passing it would be
+**rejected** — is dropped by the MCP dispatcher, is absent from both IPC handlers,
+and is absent from all 940 lines of the renderer. Agent-facing docs never mention
+classes.
+
+**Consequence: 100% of knowledge nodes written today are `class: 'knowledge'`.**
+The feature is finished one layer below every caller that could reach it.
+
+Worse, it is **write-once**: `KnowledgeUpdateInput` has only
+`title | body | tags | links`, so there is no path — MCP, IPC or store API — to
+reclassify. Any backfill needs a schema/API change or raw SQL.
+
+**Instead:** deferred. The fix is ~12 lines across four files, but it is a Genie
+change, so it is a separate finding and a separate PR.
+
+### G8 — episodic memory has no schema to stand on
+
+`episodic` answers *"what happened, and when?"* A knowledge node carries only
+`source: 'agent' | 'user'` — a binary. There is **no agent identity, no workspace,
+no session id, and no *occurred-at* distinct from *created_at*** (which is when it
+was recorded, not when it happened).
+
+So even with G7 fixed, an episodic node cannot answer "when did this happen", "who
+did it", or "in which project". Genie schema change.
+
+### G9 — nothing writes episodic memory, and nothing ever will by accident
+
+There is **no automatic capture of any kind** in Genie: no session-end hook, no
+transcript summariser, no ingestion of `.ai/knowledge/*.md`. Every node is a
+deliberate act by an agent or the user via MCP/IPC.
+
+Memory that depends on an agent *remembering* to write it is the class least
+likely to get written — the same shape of problem as `imDone` being forgotten.
+
+**This is the one the TUI can actually fix**, because a first-party harness owns
+the turn boundary and can write on turn-end without the model's cooperation. It is
+on the build list (§4.3), not deferred.
+
+### G10 — no embeddings anywhere in Genie, and no plugin memory contribution point
+
+Confirmed absent: no `sqlite-vec`, no `fastembed`, no ONNX, no cosine similarity,
+no ANN index, no embedding dependency in `package.json`. Retrieval is FTS5 bm25
+with a LIKE fallback. The store's own comment scopes the future: a semantic layer
+*"on top of `search` with a graceful fallback to this floor."*
+
+That is **correct for local-first** and not a complaint — but it means semantic
+recall over durable memory is a Genie schema change, not a switch.
+
+Separately, `PluginContributes` has no memory/knowledge entry (and plugin workers
+are fs-only), so a plugin cannot contribute a memory provider, an embedding
+backend, or an ingestion source — which is exactly the pluggable
+`AgentMemoryProvider` shape the agent-resources doc recommends.
+
+Two smaller ones found alongside: the `class` column has **no DB-level CHECK
+constraint** (unlike `source` and `kind`), and reads silently coerce an
+unrecognised value back to `knowledge` — hiding corruption rather than surfacing
+it; and **inbound links are stored but never queried**, so there are no backlinks
+and no graph traversal, only a full-graph dump for the force-graph renderer.
+
+---
+
 ## Deferred, deliberately
 
 Not gaps — scope calls, recorded so they are not mistaken for oversights.
@@ -270,7 +479,15 @@ Not gaps — scope calls, recorded so they are not mistaken for oversights.
   cover them; they are not what the skeleton is proving.
 - **Memory.** No `@mastra/memory`, no semantic recall, no storage backend — so
   nothing persists across runs, and **Mastra's HITL suspend/resume needs storage**,
-  which is why approvals are rendered but not yet resolvable.
+  which is why approvals are rendered but not yet resolvable. Durable memory is
+  Genie's knowledge graph (G7–G10), not a second store; an external backend such
+  as Supermemory sits behind an interface and is not a v1 dependency.
+- **Local-model support.** The `MastraModelGateway` (M7), the model-profile table
+  (M9) and the local `SchemaCompatLayer` (M10) are designed and budgeted, not
+  built. The skeleton runs against whatever `ANTHROPIC_API_KEY` finds, or its own
+  offline model — i.e. it does not yet prove the local path.
+- **Observational Memory** (M11) — it would put a second model on the box and
+  defaults to a cloud call.
 - **The generic Human+ MCP bridge** (F5) — Genie's path only, so far.
 - **Genie→TUI push** (G5).
 - **Tynn board surface.** Designed, not built.
