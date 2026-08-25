@@ -159,14 +159,33 @@ full unmodified Zod→JSON-Schema** — nested unions, refinements, format const
 is `undefined`, so `jsonPromptInjection: 'auto'` cannot make an informed choice —
 set it explicitly.
 
-### M11 — Observational Memory defaults to a cloud call
+### M11 — Observational Memory defaults to a cloud call, and its runtime switcher is string-only
 
 Mastra's answer to context growth is OM (compaction is explicitly *"not provided
-out of the box"*). OM runs **two background agents**, an observer and a reflector
-— so a second model on the box, contending for VRAM with the main one — and it
-**defaults to `google/gemini-2.5-flash`**. Enabling it without setting a model is
-an unrequested cloud call in a local-first product. **Instead:** off by default;
-if enabled, model set explicitly and locally.
+out of the box"*). Two findings, and the first is milder than it first looked.
+
+**The cloud dependency is a default, not a constraint.**
+`ObservationalMemoryObservationConfig.model` and its reflection counterpart are
+both typed `AgentConfig['model']` — the same type `new Agent({ model })` takes —
+so the object form `{ id: 'ollama/…', url: 'http://localhost:11434/v1' }` is
+accepted. Compile-verified, not inferred. But **left unset it is
+`google/gemini-2.5-flash`** (`@default` in the source), i.e. an unrequested cloud
+call in a local-first product. A silent default is a poor choice for a model
+selection; it should have no default, or an explicit opt-in.
+
+**The runtime switcher cannot express a local endpoint.**
+`AgentControllerOMConfig.defaultObserverModelId` and
+`session.om.observer.switchModel({ modelId })` are both `string` — the same wall
+as M7. So a local Observer can be *pinned at construction* with no gateway, but
+cannot be *selected at runtime* without one.
+
+**Correction to an earlier version of this entry**, which said OM must stay off
+because it runs two background agents contending for VRAM. The thresholds say
+otherwise: observation fires only above `messageTokens` (default 30,000) and
+reflection above `observationTokens` (default 40,000), so it is **zero extra
+calls on a typical turn**, not continuous load. The real local constraint is that
+the Observer ingests up to `maxTokensPerBatch` (default 10,000) in ONE call, so
+it needs more context than the main loop may have.
 
 ### M12 — the model catalogue needs the network
 
@@ -486,8 +505,8 @@ Not gaps — scope calls, recorded so they are not mistaken for oversights.
   (M9) and the local `SchemaCompatLayer` (M10) are designed and budgeted, not
   built. The skeleton runs against whatever `ANTHROPIC_API_KEY` finds, or its own
   offline model — i.e. it does not yet prove the local path.
-- **Observational Memory** (M11) — it would put a second model on the box and
-  defaults to a cloud call.
+- **Observational Memory** (M11) — works locally when its model is set
+  explicitly; deferred as scope, not as a limitation.
 - **The generic Human+ MCP bridge** (F5) — Genie's path only, so far.
 - **Genie→TUI push** (G5).
 - **Tynn board surface.** Designed, not built.
