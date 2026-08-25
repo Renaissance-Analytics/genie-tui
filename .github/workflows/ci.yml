@@ -1,0 +1,57 @@
+name: CI
+
+# Genie spawns this TUI in a pty on macOS, Windows and Linux, so all three are a
+# hard requirement rather than a nice-to-have — and this repository is public
+# precisely so the matrix is free (Actions is metered on private repos, and
+# macOS runners bill at a 10x minute multiplier).
+#
+# The suite needs no API key, no model download and no network egress: the
+# local-model proof stands up its own OpenAI-compatible server on an ephemeral
+# port. That is deliberate — the local-first claim should be verifiable by
+# anyone reading this repository, not just on a machine with a GPU.
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    test:
+        name: ${{ matrix.os }} · node ${{ matrix.node }}
+        runs-on: ${{ matrix.os }}
+        strategy:
+            # Never mask a platform-specific failure by cancelling its siblings —
+            # the point of the matrix is to see WHICH platform broke.
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, macos-latest, windows-latest]
+                # 22.13 is the floor `@mastra/core` requires; 24 is what most
+                # contributors run. Both, so neither can rot unnoticed.
+                node: ['22.13', '24']
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node }}
+                  cache: npm
+
+            - run: npm ci
+
+            - name: Typecheck
+              run: npm run typecheck
+
+            - name: Test
+              run: npm test
+
+            # Proves the thing actually BOOTS on this OS, not just that its units
+            # pass. `--print` mounts the harness, registers the surfaces and reads
+            # them back without needing a TTY.
+            - name: Non-interactive smoke
+              run: npx tsx src/cli.tsx --print --name ci

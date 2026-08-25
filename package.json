@@ -1,0 +1,38 @@
+{
+    "name": "@genie/tui",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "dependencies": {
+        "@mastra/core": "^1.61.0",
+        "@mastra/libsql": "^1.21.1",
+        "@particle-academy/fancy-tui": "^0.10.0",
+        "ink": "^7.1.1",
+        "react": "^19.2.8",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.1",
+        "@types/react": "^19.2.18",
+        "ink-testing-library": "^4.0.0",
+        "tsx": "^4.23.12",
+        "typescript": "^5.9.3",
+        "vitest": "^3.2.7"
+    },
+    "scripts": {
+        "test": "vitest run",
+        "typecheck": "tsc --noEmit"
+    },
+    "bin": {
+        "genie-tui": "./dist/cli.js"
+    },
+    "description": "Genie's first-party coding-agent harness — a TUI provider on Mastra and fancy-tui, optimised for local models.",
+    "license": "SEE LICENSE IN LICENSE",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Renaissance-Analytics/genie-tui.git"
+    },
+    "engines": {
+        "node": ">=22.13.0"
+    }
+}
