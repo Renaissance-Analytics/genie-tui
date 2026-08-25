@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { Agent } from '@mastra/core/agent';
 
 import { createHarness } from '../harness.js';
+import { mastraRuntime } from '../runtime/mastra.js';
 
 /**
  * The LOCAL-MODEL path, proved end to end against a real HTTP server.
@@ -116,7 +117,7 @@ describe('a locally hosted OpenAI-compatible model', () => {
         const harness = await createHarness({
             name: 'local',
             cwd: process.cwd(),
-            agent: localAgent(baseUrl),
+            runtime: mastraRuntime({ agent: localAgent(baseUrl) }),
             sessionId: 'local-1',
         });
 
@@ -144,7 +145,7 @@ describe('a locally hosted OpenAI-compatible model', () => {
         const harness = await createHarness({
             name: 'local',
             cwd: process.cwd(),
-            agent: localAgent(baseUrl),
+            runtime: mastraRuntime({ agent: localAgent(baseUrl) }),
             sessionId: 'local-2',
         });
         await harness.send('hi');
@@ -167,7 +168,7 @@ describe('a locally hosted OpenAI-compatible model', () => {
             name: 'local',
             cwd: process.cwd(),
             // Port 1 is reserved and never listening.
-            agent: localAgent('http://127.0.0.1:1/v1'),
+            runtime: mastraRuntime({ agent: localAgent('http://127.0.0.1:1/v1') }),
             sessionId: 'local-3',
         });
 

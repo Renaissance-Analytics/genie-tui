@@ -3,6 +3,7 @@ import { Agent } from '@mastra/core/agent';
 import { createMockModel } from '@mastra/core/test-utils/llm-mock';
 
 import { createHarness } from '../harness.js';
+import { mastraRuntime } from '../runtime/mastra.js';
 
 /**
  * The proof that the stack actually works: a REAL Mastra `AgentController` and
@@ -30,7 +31,7 @@ describe('embedding Mastra', () => {
         const harness = await createHarness({
             name: 'skeleton',
             cwd: process.cwd(),
-            agent: agentAnswering('ok'),
+            runtime: mastraRuntime({ agent: agentAnswering('ok') }),
             sessionId: 'chat-1',
         });
 
@@ -52,7 +53,7 @@ describe('embedding Mastra', () => {
         const harness = await createHarness({
             name: 'skeleton',
             cwd: process.cwd(),
-            agent: agentAnswering('ok'),
+            runtime: mastraRuntime({ agent: agentAnswering('ok') }),
             sessionId: 'e2f1c0de-0000-4000-8000-000000000000',
         });
 
@@ -64,7 +65,7 @@ describe('embedding Mastra', () => {
         const harness = await createHarness({
             name: 'skeleton',
             cwd: process.cwd(),
-            agent: agentAnswering('Hello from Mastra.'),
+            runtime: mastraRuntime({ agent: agentAnswering('Hello from Mastra.') }),
             sessionId: 'chat-2',
         });
 
@@ -90,7 +91,7 @@ describe('embedding Mastra', () => {
         const harness = await createHarness({
             name: 'skeleton',
             cwd: process.cwd(),
-            agent: agentAnswering('Streaming answer.'),
+            runtime: mastraRuntime({ agent: agentAnswering('Streaming answer.') }),
             sessionId: 'chat-3',
         });
 

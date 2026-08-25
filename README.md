@@ -32,15 +32,24 @@ justification for the whole project, and it is the thing the tests assert.
 |---|---|
 | `src/protocol.ts` | the harness protocol — state + a closed event union. No dependencies. |
 | `src/reduce.ts` | pure `reduce(state, event, now)`. Where turn state is derived. |
-| `src/adapter/mastra.ts` | the **only** file that knows Mastra's vocabulary. |
+| `src/runtime.ts` | **our** agent-runtime interface. Mastra is temporary; this is the seam it leaves through. |
+| `src/runtime/mastra.ts` + `src/adapter/mastra.ts` | the only files that know Mastra exists. |
 | `src/harness.ts` | Mastra `AgentController` + `Session`, embedded in-process. |
 | `src/surfaces.ts` | `fancy-tui` Human+ surfaces — the integration contract. |
 | `src/bridge/genie.ts` | reports state over Genie's per-terminal MCP endpoint. |
 | `src/ui/App.tsx` | the surface. `MessageList` (committed) + `LiveRegion` (live). |
 | `src/offline-model.ts` | a minimal AI SDK v2 model, so it runs with no API key. |
 
-The dependency rule: `protocol` and `reduce` import nothing; `ui` and `bridge`
-import `protocol` but never Mastra. Upstream churn lands in `adapter/` alone.
+The dependency rule: **nothing above `src/runtime.ts` may import a vendor.**
+`protocol` and `reduce` import nothing at all; `harness`, `ui`, `bridge` and
+`surfaces` are written against `HarnessEvent`, which we define. Swapping the
+runtime is one new file implementing `Runtime`.
+
+That is enforced, not asked for: `runtime-boundary.test.ts` runs the whole
+harness against a hand-written runtime AND reads the files above the seam as
+source, failing on any `@mastra` import — with a positive control asserting the
+adapter below it still has one. An earlier version of this README claimed the
+seam existed when it did not (GAPS H2); it is now a test rather than a promise.
 
 ## Local models first
 
@@ -67,7 +76,7 @@ carried — **runtime** model switching to a local endpoint needs a custom
 
 ```bash
 npm install
-npm test          # 62 tests
+npm test          # 72 tests
 npm run typecheck
 
 npx tsx src/cli.tsx --print                      # non-interactive smoke

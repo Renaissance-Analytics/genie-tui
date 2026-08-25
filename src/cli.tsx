@@ -8,6 +8,7 @@ import { App } from './ui/App.js';
 import { createGenieBridge } from './bridge/genie.js';
 import { offlineModel } from './offline-model.js';
 import { createHarness } from './harness.js';
+import { mastraRuntime } from './runtime/mastra.js';
 import { harnessSurfaces } from './surfaces.js';
 import type { Harness } from './harness.js';
 import type { HarnessState } from './protocol.js';
@@ -87,7 +88,14 @@ async function main(): Promise<void> {
     const name = arg('name') ?? 'genie';
     const { agent, offline } = buildAgent();
 
-    const harness = await createHarness({ name, cwd: process.cwd(), agent, sessionId });
+    const harness = await createHarness({
+        name,
+        cwd: process.cwd(),
+        sessionId,
+        // The ONE place a runtime is chosen. Swapping Mastra out is a change
+        // here and in runtime/mastra.ts, nowhere else.
+        runtime: mastraRuntime({ agent }),
+    });
 
     // The Human+ registry: the same surfaces Genie reads are the ones any
     // Human+ MCP client reads. Not a Genie back door.

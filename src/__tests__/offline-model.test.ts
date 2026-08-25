@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Agent } from '@mastra/core/agent';
 
 import { createHarness } from '../harness.js';
+import { mastraRuntime } from '../runtime/mastra.js';
 import { offlineModel } from '../offline-model.js';
 
 /**
@@ -29,11 +30,13 @@ describe('the offline model', () => {
             name: 'skeleton',
             cwd: process.cwd(),
             sessionId: 'offline-1',
-            agent: new Agent({
-                id: 'offline',
-                name: 'Offline',
-                instructions: 'skeleton',
-                model: offlineModel('No API key set.') as never,
+            runtime: mastraRuntime({
+                agent: new Agent({
+                    id: 'offline',
+                    name: 'Offline',
+                    instructions: 'skeleton',
+                    model: offlineModel('No API key set.') as never,
+                }),
             }),
         });
 

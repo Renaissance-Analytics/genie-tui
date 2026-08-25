@@ -490,6 +490,47 @@ and no graph traversal, only a full-graph dump for the force-graph renderer.
 
 ---
 
+---
+
+## This project's own
+
+### H1 — `send()` never resolves if a runtime dies mid-turn
+
+`Harness.send()` resolves on a **declared** `turn-end`, which is the entire point
+of the protocol — deriving the boundary from a timer would reintroduce the guess
+this project exists to remove. But it means a runtime that stops emitting without
+declaring an end leaves the caller awaiting forever. There is no timeout and no
+cancellation path.
+
+**Found by a test of my own that hung**, not by review: the first draft of
+*"reports turn state from the runtime it was given"* awaited `send()` on a turn
+parked at `awaiting-approval` and timed out at 5s. The test's shape was wrong —
+an approval genuinely is mid-turn — but the hang it exposed is real.
+
+**Not fixed with a timeout.** That would be a bandaid: the correct answer is a
+cancellation contract on `RuntimeSession` (an `AbortSignal`, and a runtime
+obligation to emit `turn-end` with `reason: 'error'` when it gives up), so the
+failure is *declared* like everything else rather than inferred from silence.
+Deferred deliberately, recorded so it is not mistaken for an oversight.
+
+### H2 — the Mastra boundary was weaker than documented
+
+`README.md` and the design doc both claimed `adapter/mastra.ts` was *"the only
+file that knows Mastra's vocabulary"*. Measured, that was false: Mastra was
+imported by **three** production files — `adapter/mastra.ts`, `harness.ts`
+(constructing `AgentController` and `Session`) and `cli.tsx` (constructing
+`Agent`). True of its *event* vocabulary, not its *construction* vocabulary.
+
+That mattered little while Mastra was assumed permanent. It matters a lot now
+that it is temporary, so the seam was made real: `src/runtime.ts` is our own
+interface, `src/runtime/mastra.ts` is the only implementation, and
+`__tests__/runtime-boundary.test.ts` holds the invariant **as source** — it reads
+the files above the seam and fails on any `@mastra` import, with a positive
+control asserting the adapter below it still has one.
+
+The lesson worth keeping: a boundary asserted in a doc comment is not a boundary.
+This one now fails a test when it breaks.
+
 ## Deferred, deliberately
 
 Not gaps — scope calls, recorded so they are not mistaken for oversights.
