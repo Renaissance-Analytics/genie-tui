@@ -151,4 +151,23 @@ describe('the seam holds, as source', () => {
         const source = fs.readFileSync(path.join(here, '..', 'runtime', 'mastra.ts'), 'utf8');
         expect(source).toMatch(/@mastra/);
     });
+
+    /**
+     * The same guard for Prism is OWED, not written — and is recorded here
+     * rather than added, because adding it today would be a lie that reports
+     * green.
+     *
+     * A `not.toMatch(/@particle-academy\/prism/)` row would pass immediately
+     * against all seven files above, and for the wrong reason: nothing imports
+     * it, there is no `runtime/prism.ts` to serve as its positive control, and
+     * the package cannot be installed at all (GAPS.md §P1). "No match" against a
+     * vendor nothing could have added is exactly the corpse the control above
+     * exists to rule out, so it is left owed and visible instead.
+     *
+     * A trap for whoever writes it: this check reads the WHOLE source, comments
+     * included, so prose naming the package trips it just as an import does.
+     * The note in `runtime.ts` about Prism avoids the literal scoped name for
+     * that reason, and a new one should too.
+     */
+    it.todo('no file above the seam imports Prism (needs runtime/prism.ts as its positive control)');
 });
