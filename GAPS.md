@@ -341,6 +341,11 @@ not draw it:
   then emits `StreamEndEvent(FinishReason.ToolCalls)`. No refusal anywhere on
   that path.
 
+That holds for **all three providers**, not just Mistral: neither the OpenAI nor
+the Anthropic stream mapper refuses either, and both emit `ToolCallEvent`. The
+refusal lives in one place — the non-streaming parse — so the cloud fallback
+path gets tools on the same terms the local one does.
+
 And every part a loop needs is already public and exported: `Tool` carries a
 handler and `handle(args)`, `ToolCall.parsedArguments()` decodes the streamed
 argument string, `AssistantMessage(content, toolCalls)` and
