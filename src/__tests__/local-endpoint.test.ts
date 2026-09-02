@@ -28,6 +28,14 @@ import { mastraRuntime } from '../runtime/mastra.js';
  * `temperature`/`topP`/`topK` for any model absent from its hardcoded registry
  * list, and "absent" means unlisted rather than unsupported — so an id its
  * registry does not know is the one that keeps sampling settings intact.
+ *
+ * **When this proof is ported to Prism, the provider is `mistral`.** Prism's
+ * OpenAI provider speaks the Responses API and posts to `/responses`, so it
+ * would never reach the `/chat/completions` handler below; its Mistral provider
+ * takes a base URL and sends no `Authorization` header when the key is empty,
+ * which is exactly the server this file stands up. Reaching for the
+ * OpenAI-shaped provider because the endpoint is "OpenAI-compatible" is the
+ * mistake this note exists to prevent. GAPS.md §P3.
  */
 
 let server: http.Server;
