@@ -5,8 +5,9 @@ here is a design gap in something — Mastra, `fancy-tui`, the Fancy backends, o
 Genie. Recorded as they were hit while building the walking skeleton, not
 reconstructed afterwards.
 
-**G0 is filed as genie#261.** Everything else is unfiled. Fancy items are
-**issue-first** by protocol — file on the Fancy repo, never clone-fix-publish.
+**G0 is filed as genie#261 and P1 as prism-ts#5.** Everything else is unfiled.
+Fancy and Prism items are **issue-first** by protocol — file on their own repo,
+never clone-fix-publish.
 
 ---
 
@@ -15,8 +16,10 @@ reconstructed afterwards.
 > ### Shelf life — read this before acting on anything below
 >
 > **Mastra is a temporary dependency with a planned exit**: the first-party
-> harness lands when the Prism language-parity packages do. That changes what
-> these findings are FOR. They are no longer a backlog of things to work around;
+> harness lands when the Prism language-parity packages do. **They have landed;
+> the swap has not** — it is blocked on prism-ts being installable at all, which
+> is [P1](#p1--prism-ts-cannot-be-installed-the-install-succeeds-and-the-import-fails-blocking-filed-prism-ts5).
+> That changes what these findings are FOR. They are no longer a backlog of things to work around;
 > most of them are **requirements for the harness that replaces it**.
 >
 > Nothing here is filed upstream, and nothing will be — effort spent improving
@@ -249,6 +252,176 @@ agent as-is" is not viable below ~32k context**, which is most local setups.
 
 `@mastra/core` depends on `posthog-node`. A review item before this ships in a
 product, not a bug.
+
+---
+
+## Prism
+
+Version read: **`@particle-academy/prism` 0.1.0**, `Particle-Academy/prism-ts` at
+`main` (2026-09-02). Read as source, not run — see P1 for why it could not be run.
+
+> ### What this section is
+>
+> The Mastra shelf-life note above says the first-party harness lands "when the
+> Prism language-parity packages do." **They have.** prism-ts exists, carries
+> every capability the PHP reference has across three providers, and ships with
+> **no runtime dependencies at all** — its `package.json` has devDependencies and
+> nothing else, which already answers M14.
+>
+> So the question is no longer *when*; it is *what is still in the way*. Exactly
+> one thing is, and it is one line of somebody else's `package.json` (P1).
+>
+> The other two obstacles a migration was expected to hit — no tool loop, and no
+> reachable local endpoint — **are not obstacles.** P2 and P3 record why, because
+> both conclusions are the opposite of what prism-ts's own README implies, and
+> the next person to read that README will draw the same wrong conclusion.
+
+### P1 — prism-ts cannot be installed: the install SUCCEEDS and the import fails *(blocking, FILED: prism-ts#5)*
+
+**Tried:** `npm install @particle-academy/prism`, then the only alternative,
+`npm install github:Particle-Academy/prism-ts`.
+
+**Expected:** the first to 404 (it is unpublished, and the README's install
+instructions are aspirational); the second to work, since a git dependency is the
+ordinary way to consume a package before its first release.
+
+**Got:** `added 1 package in 18s`, and a package that cannot be loaded.
+
+```
+node_modules/@particle-academy/prism/   LICENSE  package.json  README.md
+import('@particle-academy/prism')       ERR_MODULE_NOT_FOUND .../dist/index.js
+```
+
+Three individually-correct facts, jointly fatal: `main` points into `dist/`
+and `files` is `["dist", "LICENSE"]`; `dist/` is gitignored, rightly; and there is
+**no `prepare` script**. `prepare` is the one lifecycle hook npm runs for a git
+dependency; without it nothing builds, and because `files` also excludes `src/`
+there is no source left on disk for a consumer to build *afterwards*. So this is
+not fixable from our side — not with a `postinstall`, not with anything.
+
+There is no other way in: no npm release, no GitHub release, no tag, no second
+branch, no GitHub Packages entry.
+
+**Worst part is the shape of the failure**, and it is the same shape RULES.md
+warns about for piped shell commands: *a failure that reports success*. `npm ci`
+would go green in CI and the break would surface later, somewhere else, as a
+missing module.
+
+**Instead:** nothing. This is the whole reason the Prism runtime is not in this
+repository. Filed upstream as
+[prism-ts#5](https://github.com/Particle-Academy/prism-ts/issues/5) asking for
+`"prepare": "npm run build"`, or a publish. The mechanism was verified rather
+than assumed — two throwaway git repos identical but for that one line, installed
+as `git+file://` dependencies:
+
+| | installed contents | `import` |
+|---|---|---|
+| without `prepare` | `package.json` | `ERR_MODULE_NOT_FOUND` |
+| with `prepare` | `package.json`, `dist/` | resolves |
+
+**Do not work around this.** A committed tarball, a vendored copy or a submodule
+would each trade a one-line upstream fix for a permanent maintenance surface, and
+copying Prism's source here is explicitly out of bounds.
+
+### P2 — the tool-execution loop is refused on the NON-streaming path only
+
+prism-ts's README is unambiguous: *"Not included, and not stubbed: the
+tool-execution loop — a response that finishes on tool calls is refused with
+`tool_loop_not_supported` rather than half-executed."* For a coding-agent harness
+that reads as fatal, since the loop **is** the product.
+
+It is not, and the distinction is worth stating precisely because the README does
+not draw it:
+
+- **`asText()` refuses.** `parseTextResponse` throws `tool_loop_not_supported`
+  the moment the finish reason is `tool-calls`. Nothing usable comes back.
+- **`asStream()` does not.** `MistralStreamMapper` accumulates tool-call
+  arguments *across* chunks — they arrive a few characters at a time keyed only
+  by an index — flushes a whole `ToolCallEvent` once the JSON is complete, and
+  then emits `StreamEndEvent(FinishReason.ToolCalls)`. No refusal anywhere on
+  that path.
+
+And every part a loop needs is already public and exported: `Tool` carries a
+handler and `handle(args)`, `ToolCall.parsedArguments()` decodes the streamed
+argument string, `AssistantMessage(content, toolCalls)` and
+`ToolResultMessage([ToolResult])` model the two turns a round trip appends, and
+the chat-completions message map already emits `tool_calls` on the assistant turn
+and `role: 'tool'` + `tool_call_id` on the result.
+
+So the loop is **ours to own**, over `asStream()`, and it is a component to build
+rather than a wall to wait behind:
+
+1. stream a turn; `TextDeltaEvent` feeds the live region, one `HarnessEvent`
+   each — which incidentally closes **M3**, the missing token-level delta.
+2. on `ToolCallEvent`, emit `tool-start`, run the handler, emit `tool-end`.
+3. on `StreamEndEvent(ToolCalls)`, append the `AssistantMessage` and a
+   `ToolResultMessage`, and stream again. Anything else ends the turn.
+
+**Budget it as a real component, not an adapter.** It owns the step limit,
+approval gating, and — see H1 — turn termination on failure. Approvals in
+particular stay entirely ours: Prism round-trips `toolApprovalRequests` on
+`AssistantMessage` as raw JSON so its serialisation matches the reference, but it
+does not model the feature, so nothing there decides whether a tool may run.
+
+### P3 — a local endpoint is reachable, but through the `mistral` provider, not `openai`
+
+The product constraint is local models first, and prism-ts ships three providers
+of which the obvious one is wrong for it.
+
+**`openai` will not work.** It speaks the **Responses API** and posts to
+`${url}/responses`. Ollama, llama.cpp, LM Studio and vLLM serve
+`/v1/chat/completions` and do not serve `/responses`. Pointing `OPENAI_URL` at a
+local server fails, and fails for a reason that looks like a broken server.
+
+**`mistral` is the local-model client.** It posts to `${url}/chat/completions`,
+takes `url` from `config.url ?? MISTRAL_URL ?? api.mistral.ai`, and — this is the
+part that matters — **omits the `Authorization` header entirely when `apiKey` is
+`''`**. That is precisely the keyless OpenAI-compatible shape
+`src/__tests__/local-endpoint.test.ts` already stands a real server up to serve.
+It handles the SSE `[DONE]` sentinel, and it reads `content` as either a string
+or the typed-chunk array reasoning models return.
+
+Two consequences worth carrying forward:
+
+- **M7 dissolves.** Mastra's single most consequential limitation was that
+  `session.model.switch()` takes a string and so cannot carry a URL, forcing a
+  custom `MastraModelGateway`. Prism takes provider, model and `{ url, apiKey,
+  transport }` together at `using()`, per request. Runtime model switching to an
+  arbitrary local endpoint is a normal call. **The gateway does not need to be
+  built.**
+- **M8 dissolves too.** `buildRequestBody` passes sampling params through a
+  not-null filter, so `0` and `false` survive and only `null` is dropped. No
+  registry lookup, no hardcoded model list, nothing silently stripped — which
+  also means `local/test-model`'s deliberately-unknown provider prefix stops
+  being load-bearing once the runtime moves.
+
+**One caveat, and it is ours rather than theirs:** the Mistral body has no
+`top_k`, faithfully, because Mistral's API has none. But local servers do support
+it, so `usingTopK()` is silently ignored on exactly the provider local models
+must use — the *shape* of M8 reappearing for one parameter. If that matters, the
+upstream ask is a first-class `openai-compatible` provider id rather than a bug
+report against `mistral`; it is a scope proposal and the owner's call.
+
+### P4 — what Prism inherits from the Mastra requirement list
+
+Ten of the fourteen Mastra findings above were logged as **requirements for the
+harness that replaces it**. Read against prism-ts 0.1.0:
+
+| # | requirement | under Prism |
+|---|---|---|
+| M3 | token-level text delta | **met** — `TextDeltaEvent` per chunk |
+| M5 | small, normalised event surface | **met** — seven stream event types, not fifty |
+| M6 | a typed model reference | **partly** — model is still a string, but provider and `{ url, apiKey }` are separate arguments rather than one router string |
+| M7 | the model reference must carry an endpoint | **met** — see P3 |
+| M8 | never silently strip sampling config | **met**, except `top_k` — see P3 |
+| M9 | context-window metadata | **not addressed** — Prism has no model catalogue, so our model-profile table is still ours to own |
+| M10 | tool-call repair | **partly met** — `parsedArguments()` escapes raw control characters inside JSON strings and retries, which is the common local-model failure. A schema-compat layer is still ours |
+| M12 | the catalogue must work offline | **moot** — there is no catalogue to need the network |
+| M13 | budget the base prompt | **met** — Prism sends what it is given and nothing else |
+| M14 | telemetry off or absent | **met** — zero runtime dependencies |
+
+The residue after the swap is small and known: the model-profile table (M9), the
+local schema-compat layer (M10), and the tool loop itself (P2).
 
 ---
 
