@@ -20,11 +20,13 @@
         "vitest": "^3.2.7"
     },
     "scripts": {
+        "prebuild": "node scripts/clean-dist.mjs",
+        "build": "tsc -p tsconfig.build.json",
         "test": "vitest run",
         "typecheck": "tsc --noEmit"
     },
     "bin": {
-        "genie-tui": "./dist/cli.js"
+        "genie": "./dist/cli.js"
     },
     "description": "Genie's first-party coding-agent harness — a TUI provider on Mastra and fancy-tui, optimised for local models.",
     "license": "SEE LICENSE IN LICENSE",
@@ -34,5 +36,8 @@
     },
     "engines": {
         "node": ">=22.13.0"
-    }
+    },
+    "files": [
+        "dist"
+    ]
 }

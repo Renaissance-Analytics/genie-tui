@@ -1,9 +1,11 @@
 import React from 'react';
+import { useInput } from 'ink';
 import {
     Badge,
     Composer,
     FancyTuiProvider,
     Header,
+    KeyHint,
     LiveRegion,
     MessageList,
     Panel,
@@ -14,7 +16,8 @@ import {
     ToolCall,
 } from '@particle-academy/fancy-tui';
 
-import type { HarnessState } from '../protocol.js';
+import { SURFACE_IDS } from '../surfaces.js';
+import type { HarnessState, PendingApproval } from '../protocol.js';
 import type { HarnessActions } from '../surfaces.js';
 
 /**
@@ -41,6 +44,58 @@ export interface AppProps {
     height?: number;
 }
 
+/** How much of a tool's arguments to show. A `write_file` carries a whole file. */
+const MAX_ARGS = 240;
+
+/**
+ * What the agent is asking permission to do, in one line.
+ *
+ * The arguments matter more than the tool name. "May I write a file?" is not a
+ * question anyone can answer responsibly; "may I write src/x.ts?" is.
+ */
+function describeArgs(args: unknown): string {
+    if (args === undefined || args === null) return '';
+    const text = typeof args === 'string' ? args : JSON.stringify(args);
+    if (!text) return '';
+    return text.length > MAX_ARGS ? `${text.slice(0, MAX_ARGS)}…` : text;
+}
+
+/**
+ * The one screen where the human is the blocking dependency.
+ *
+ * It REPLACES the composer rather than sitting alongside it. Ink delivers every
+ * keypress to every mounted `useInput`, so with the composer still on screen a
+ * `y` would approve the tool and type a `y` at the same time. Exclusivity is
+ * the reason for the swap, not tidiness.
+ */
+function ApprovalPrompt({
+    approval,
+    onApprove,
+    onDeny,
+}: {
+    approval: PendingApproval;
+    onApprove: (id: string) => void;
+    onDeny: (id: string) => void;
+}): React.JSX.Element {
+    useInput((input) => {
+        const key = input.toLowerCase();
+        if (key === 'y') onApprove(approval.id);
+        if (key === 'n') onDeny(approval.id);
+    });
+
+    const args = describeArgs(approval.args);
+
+    return (
+        <Panel tone="warning" title="Approval required">
+            <Stack gap="xs">
+                <Text>{approval.name}</Text>
+                {args ? <Text tone="muted">{args}</Text> : null}
+                <KeyHint keys={['y', 'n']} label="y approve · n deny" />
+            </Stack>
+        </Panel>
+    );
+}
+
 const TURN_TONE = {
     idle: 'neutral',
     thinking: 'info',
@@ -51,6 +106,7 @@ const TURN_TONE = {
 
 export function App({
     state,
+    actions,
     onChange,
     onSubmit,
     width,
@@ -85,25 +141,37 @@ export function App({
                             <ToolCall key={t.id} call={{ id: t.id, name: t.name, status: t.status }} />
                         ))}
 
-                        {approvals.length > 0 ? (
-                            <Panel tone="warning" title="Approval required">
-                                <Stack gap="xs">
-                                    {approvals.map((a) => (
-                                        <Text key={a.id}>{a.name}</Text>
-                                    ))}
-                                </Stack>
-                            </Panel>
-                        ) : null}
                     </Stack>
                 </LiveRegion>
 
-                <Composer
-                    id="composer"
-                    value={composer.text}
-                    onChange={onChange}
-                    onSubmit={onSubmit}
-                    placeholder={composer.busy ? 'Working — your message will be queued' : 'Ask anything'}
-                />
+                {/*
+                 * One or the other, never both — see `ApprovalPrompt`: two
+                 * mounted input handlers would both receive every keypress.
+                 *
+                 * The composer's id is `composer.input`, NOT `composer`. This
+                 * component registers a Human+ surface under whatever `id` it is
+                 * given, and the harness publishes its own `composer` surface —
+                 * the one carrying `busy` and `deliver`. Both under one id is a
+                 * duplicate, the registry throws on duplicates, and the app died
+                 * on mount after painting a single frame. See SURFACE_IDS.
+                 */}
+                {approvals[0] ? (
+                    <ApprovalPrompt
+                        approval={approvals[0]}
+                        onApprove={actions.approve}
+                        onDeny={actions.deny}
+                    />
+                ) : (
+                    <Composer
+                        id={SURFACE_IDS.composerInput}
+                        value={composer.text}
+                        onChange={onChange}
+                        onSubmit={onSubmit}
+                        placeholder={
+                            composer.busy ? 'Working — your message will be queued' : 'Ask anything'
+                        }
+                    />
+                )}
 
                 {/*
                  * The turn state is displayed because the harness HOLDS it, not

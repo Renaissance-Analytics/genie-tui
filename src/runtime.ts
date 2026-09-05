@@ -48,6 +48,20 @@ export interface RuntimeSession {
     interrupt(): void;
 
     /**
+     * Release a parked tool-approval gate.
+     *
+     * Not optional, and not a widening for one vendor's convenience: without it
+     * `awaiting-approval` — one of the five turn states the protocol declares —
+     * is a state nothing can leave. A runtime that gates tool calls and cannot
+     * be answered hangs on its first one, which is exactly what happened here
+     * before this existed.
+     *
+     * A runtime that never gates anything implements this as a no-op, because
+     * it will never emit `approval-required` either.
+     */
+    respondToApproval(id: string, decision: 'approve' | 'deny'): void;
+
+    /**
      * Subscribe to harness events. Batched, because one runtime event can imply
      * several harness facts and the reducer should see them together.
      */

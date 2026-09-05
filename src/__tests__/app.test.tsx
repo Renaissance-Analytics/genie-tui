@@ -23,6 +23,8 @@ const noop = {
     submit: () => {},
     clear: () => {},
     interrupt: () => {},
+    approve: () => {},
+    deny: () => {},
 };
 
 function draw(state: HarnessState): string {

@@ -23,6 +23,35 @@ import type { HarnessState } from './protocol.js';
  *  - `session` — who this agent is, in Genie's `{provider}:{name}:{chat-id}` form.
  */
 
+/**
+ * Every surface id in one place, because two of them nearly collided fatally.
+ *
+ * `fancy-tui` components register their OWN surfaces through `useTuiSurface`,
+ * keyed on the `id` prop the consumer passes — `<Composer id="composer">`
+ * publishes `kind: 'multiline-input'` under `composer`. The registry throws on a
+ * duplicate id, so when the harness also registered its `composer` surface the
+ * app died on mount, in every terminal, having painted exactly one frame.
+ *
+ * The fix is not to rename one of them arbitrarily. They are genuinely two
+ * different things and the ids now say so:
+ *
+ *  - `composer` — the AGENT-FACING contract. Text, cursor and `busy`, plus
+ *    `deliver`, which appends without disturbing a half-typed line. This is
+ *    what replaces Genie's keystroke-folded draft model, and `busy` is the fact
+ *    that lets a delivery be queued rather than typed at a running agent.
+ *  - `composer.input` — the WIDGET underneath. Raw buffer, cursor and selection.
+ *    It knows about text and nothing about turns.
+ *
+ * The dotted id states the containment rather than hiding the relationship
+ * behind an unrelated name.
+ */
+export const SURFACE_IDS = {
+    composer: 'composer',
+    composerInput: 'composer.input',
+    turn: 'turn',
+    session: 'session',
+} as const;
+
 export interface HarnessActions {
     /** Replace the composer buffer. The human typing, or a programmatic edit. */
     setText: (text: string, cursor?: number) => void;
@@ -37,6 +66,10 @@ export interface HarnessActions {
     clear: () => void;
     /** Abort the in-flight turn. */
     interrupt: () => void;
+    /** Let a parked tool call proceed. */
+    approve: (id: string) => void;
+    /** Refuse a parked tool call. The turn continues; the tool does not. */
+    deny: (id: string) => void;
 }
 
 /**
@@ -58,7 +91,7 @@ export function harnessSurfaces(
 ): TuiSurfaceDescriptor[] {
     return [
         {
-            id: 'composer',
+            id: SURFACE_IDS.composer,
             kind: 'input',
             label: 'Prompt',
             // Deliberately the whole composer state and nothing more. No
@@ -96,7 +129,7 @@ export function harnessSurfaces(
             ],
         },
         {
-            id: 'turn',
+            id: SURFACE_IDS.turn,
             kind: 'status',
             label: 'Turn',
             read: () => {
@@ -118,7 +151,7 @@ export function harnessSurfaces(
             ],
         },
         {
-            id: 'session',
+            id: SURFACE_IDS.session,
             kind: 'identity',
             label: 'Session',
             read: () => {

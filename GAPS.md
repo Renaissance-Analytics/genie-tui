@@ -38,8 +38,9 @@ reconstructed afterwards.
 > | M12 | model catalogue needs the network | **REQUIREMENT** — the catalogue must work offline |
 > | M13 | ~4,050-token always-resident prompt | **REQUIREMENT** — budget the base prompt; half an 8k window is not viable |
 > | M14 | telemetry on by default | **REQUIREMENT** — off, or absent |
+> | M15 | tool approval REQUIRES a storage backend | **REQUIREMENT** — gating a tool call must not depend on persistence; an in-memory harness has to be able to ask a question |
 >
-> Ten of fourteen are spec inputs rather than workarounds. **Adapt minimally
+> Twelve of sixteen are spec inputs rather than workarounds. **Adapt minimally
 > today; carry the requirement forward.** Building a deep accommodation for any
 > of these is investing in a component with a known end date.
 
@@ -250,6 +251,52 @@ agent as-is" is not viable below ~32k context**, which is most local setups.
 `@mastra/core` depends on `posthog-node`. A review item before this ships in a
 product, not a bug.
 
+### M15 — every tool call fails without a storage backend *(blocking, fixed by configuring storage)*
+
+**Tried:** give the agent file tools and run a turn.
+
+**Expected:** the tool to run.
+
+**Got:** the turn hung, then died. `AgentController` gates every tool call by
+**suspending the run**, and `respondToToolApproval` resumes it by reading a
+snapshot back out of storage. With no `storage` configured on the controller:
+
+```
+tool_approval_required  { toolCallId: 'call_1', toolName: 'read_file' }
+error                   AGENT_RESUME_NO_SNAPSHOT_FOUND —
+                        "resumeStream() could not find a suspended run for runId …"
+agent_end               { reason: 'error' }
+```
+
+So **the first tool call of the first real turn never returns**, and the failure
+does not look like a failure: `tool_end` never arrives so the tool card sits on
+"pending", and the model appears to have answered nothing.
+
+**Instead:** `new AgentController({ storage: new LibSQLStore({ id, url }) })`,
+defaulting to `:memory:`. Note `@mastra/libsql` was already a declared
+dependency of this package and was imported nowhere — the requirement was
+evidently known once and lost.
+
+**Requirement for the replacement:** asking a human for permission must not
+depend on a persistence layer. An in-process harness with no database still has
+to be able to park a tool call and resume it; coupling the question to a
+snapshot store makes the simplest possible configuration the broken one.
+
+### M16 — `message_end` fires for messages that contain no text
+
+Mastra emits `message_end` for the assistant message that HOLDS a tool
+invocation (its only part is `tool-invocation`), and wraps the user's own message
+in a `signal` role whose part is `data-user-message`. Neither carries a text
+part, so a consumer that flattens content to text gets `''` for both.
+
+Committing those painted a blank agent bubble for every tool call plus a
+duplicate of the user's message misattributed to the agent — measured, a
+one-tool turn produced a transcript of `["what does hello.txt say?", "", ""]`.
+
+**Instead:** `adapter/mastra.ts` drops any message that flattens to empty.
+**Requirement:** distinguish "a message with no text" from "a message" at the
+event level, rather than making every consumer discover it by rendering blanks.
+
 ---
 
 ## fancy-tui
@@ -304,6 +351,36 @@ Reasonable, but the type is only discoverable by reading `.d.mts`; the registry
 docs do not enumerate them or say which one gates what. I guessed `'auto'`
 first, which does not exist. Small docs gap.
 
+### F6 — a component's surface id collides with the host's, and the failure is fatal *(cost: the app never ran)*
+
+`Composer` (via `MultilineInput`) registers its own Human+ surface through
+`useTuiSurface`, keyed on the `id` prop the consumer passes. There is no prop to
+opt out and no way to extend the descriptor. `TuiSurfaceRegistry.register`
+**throws** on a duplicate id.
+
+So a host that publishes its own semantic `composer` surface — which is the
+entire point of this project — and renders `<Composer id="composer">` inside the
+same provider gets:
+
+```
+Duplicate Fancy TUI surface id: composer
+```
+
+thrown from inside a React effect, on mount, every time. The app painted exactly
+one frame and died. It survived review for a whole walking skeleton because the
+component test rendered `App` with no `TuiSurfaceProvider`, which makes every
+registration a silent no-op (see I2).
+
+**Instead:** two ids — `composer` for the harness contract (text, cursor, `busy`,
+`deliver`) and `composer.input` for the widget's raw buffer. They are genuinely
+two surfaces, so this is a better model rather than a workaround, but the
+collision should not have been fatal to discover.
+
+**Worth filing** (issue-first, on the Fancy repo): either a `surface={false}`
+escape hatch, or a namespacing convention, or a registry that warns rather than
+throws. Related to F1 — `Composer`'s API being too small is the same shortage
+seen from another angle.
+
 ### F5 — `TuiSurfaceRegistry` has no built-in MCP bridge in this package
 
 `createTuiSurfaceRegistry()` gives `register` / `list` / `get` / `subscribe`.
@@ -333,6 +410,23 @@ Worth knowing generally: any Ink smoke test must assert the *frame*, never the
 absence of a throw.
 
 ---
+
+### I2 — a component test without the provider is testing a different program
+
+`app.test.tsx` renders `App` directly. `useTuiSurface` calls
+`registry?.register(surface)` — with no `TuiSurfaceProvider` above it the
+registry is `null` and every registration is a silent no-op.
+
+That is not a small fidelity gap. It means **every `fancy-tui` component that
+publishes a surface is inert in that test** — `Composer`, `Modal`, `Drawer`,
+`DocumentViewer`, the choice lists — and any id collision between a component
+and a surface the host registers is invisible until the real binary runs. It hid
+F6, which killed the app on mount in every terminal.
+
+`composition.test.tsx` now mounts the composition the CLI actually mounts. The
+general lesson is worth more than the fix: a test that omits the context
+provider is not a lower-fidelity test of the same program, it is a faithful test
+of a different one.
 
 ## Genie
 
@@ -574,17 +668,26 @@ This one now fails a test when it breaks.
 
 Not gaps — scope calls, recorded so they are not mistaken for oversights.
 
-- **Real tools.** No file/edit/shell tools. Mastra's `Workspace` + `LocalSandbox`
-  cover them; they are not what the skeleton is proving.
-- **Memory.** No `@mastra/memory`, no semantic recall, no storage backend — so
-  nothing persists across runs, and **Mastra's HITL suspend/resume needs storage**,
-  which is why approvals are rendered but not yet resolvable. Durable memory is
+- **Shell tools.** `read_file`, `list_dir`, `search_files` and `write_file` now
+  exist (workspace-confined, realpath-checked, approval-gated for writes). There
+  is still no shell/exec tool: it is the one where confinement is genuinely hard
+  — a command can reach anywhere the process can, so the workspace boundary the
+  file tools rely on buys nothing — and it wants a sandbox decision rather than
+  another tool.
+- **Memory.** No `@mastra/memory` and no semantic recall. Storage is now
+  configured but defaults to `:memory:` (see M15 — without it, approvals could
+  not resolve and every tool call failed), so **nothing persists across runs**.
+  A file path makes threads survive the process, which is what a cross-run
+  `--resume` would need; choosing where that file lives is an owner decision,
+  not a side effect of fixing approvals. Durable memory is
   Genie's knowledge graph (G7–G10), not a second store; an external backend such
   as Supermemory sits behind an interface and is not a v1 dependency.
-- **Local-model support.** The `MastraModelGateway` (M7), the model-profile table
-  (M9) and the local `SchemaCompatLayer` (M10) are designed and budgeted, not
-  built. The skeleton runs against whatever `ANTHROPIC_API_KEY` finds, or its own
-  offline model — i.e. it does not yet prove the local path.
+- **Local-model support, at RUNTIME.** `--model-url` reaches a local
+  OpenAI-compatible endpoint at construction and is proved end to end against a
+  real server, so the local path is no longer theoretical. What remains is
+  SWITCHING model mid-session, which needs the `MastraModelGateway` (M7) because
+  `switch()` takes a string; plus the model-profile table (M9) and the local
+  `SchemaCompatLayer` (M10). Designed and budgeted, not built.
 - **Observational Memory** (M11) — works locally when its model is set
   explicitly; deferred as scope, not as a limitation.
 - **The generic Human+ MCP bridge** (F5) — Genie's path only, so far.
