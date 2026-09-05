@@ -37,6 +37,7 @@ function fakeRuntime(script: HarnessEvent[]): Runtime {
                     }
                 },
                 interrupt() {},
+                respondToApproval() {},
                 subscribe(fn) {
                     listeners.add(fn);
                     return () => {

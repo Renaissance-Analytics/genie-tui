@@ -36,6 +36,8 @@ const noopActions: HarnessActions = {
     submit: () => {},
     clear: () => {},
     interrupt: () => {},
+    approve: () => {},
+    deny: () => {},
 };
 
 function mount() {

@@ -66,6 +66,10 @@ export interface HarnessActions {
     clear: () => void;
     /** Abort the in-flight turn. */
     interrupt: () => void;
+    /** Let a parked tool call proceed. */
+    approve: (id: string) => void;
+    /** Refuse a parked tool call. The turn continues; the tool does not. */
+    deny: (id: string) => void;
 }
 
 /**

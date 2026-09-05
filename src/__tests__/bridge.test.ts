@@ -99,6 +99,18 @@ describe('speaking to the per-terminal endpoint', () => {
         expect(JSON.stringify(received[0])).not.toContain('term-1');
     });
 
+    /**
+     * The contract is "one request, not five". It used to be asserted by
+     * sleeping 60ms and counting — which measures the machine as much as the
+     * code: on a loaded runner the debounce fires but the HTTP round trip has
+     * not finished, `received` is empty, and the test fails having proved
+     * nothing about coalescing. It flaked exactly that way in a full run.
+     *
+     * So: wait for the FIRST report to actually arrive, then hold still long
+     * enough that a second one would have landed if the burst had not been
+     * coalesced. Both halves are needed — waiting only for the first would pass
+     * against a bridge that sends five.
+     */
     it('coalesces bursts into one report rather than one per keystroke', async () => {
         const bridge = createGenieBridge({ url, terminalId: 'term-1', debounceMs: 20 });
         let s = initialState({ name: 'skeleton', cwd: '/repo' });
@@ -106,8 +118,15 @@ describe('speaking to the per-terminal endpoint', () => {
             s = reduce(s, { kind: 'composer-change', text: ch, cursor: 1 }, 1);
             bridge.schedule(s);
         }
-        await new Promise((r) => setTimeout(r, 60));
-        expect(received).toHaveLength(1);
+
+        const deadline = Date.now() + 10_000;
+        while (received.length === 0 && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(received, 'the coalesced report arrived').toHaveLength(1);
+
+        await new Promise((r) => setTimeout(r, 100));
+        expect(received, 'and the other four keystrokes sent nothing').toHaveLength(1);
     });
 
     /**

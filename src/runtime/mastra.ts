@@ -1,11 +1,14 @@
 import { Agent } from '@mastra/core/agent';
 import { AgentController } from '@mastra/core/agent-controller';
+import { createTool } from '@mastra/core/tools';
+import { LibSQLStore } from '@mastra/libsql';
 import type { AgentControllerEvent, Session } from '@mastra/core/agent-controller';
 
 import { fromMastra } from '../adapter/mastra.js';
 import { offlineModel } from '../offline-model.js';
 import type { ModelSpec } from '../model.js';
 import type { Runtime, RuntimeSession, RuntimeSessionOptions } from '../runtime.js';
+import type { HarnessTool } from '../tools.js';
 
 /**
  * The Mastra implementation of {@link Runtime} — and, with
@@ -42,7 +45,50 @@ import type { Runtime, RuntimeSession, RuntimeSessionOptions } from '../runtime.
  * mean widening the spec to carry a vendor object, which is exactly the leak
  * this seam prevents.
  */
-export type MastraRuntimeConfig = { agent: Agent } | { model: ModelSpec; instructions?: string };
+export type MastraRuntimeConfig = ({ agent: Agent } | { model: ModelSpec; instructions?: string; tools?: HarnessTool[] }) & {
+    /**
+     * Where the controller keeps its run snapshots. Defaults to in-memory.
+     *
+     * NOT optional in practice, which is why there is no way to turn it off.
+     * `AgentController` gates every tool call by SUSPENDING the run, and
+     * resuming reads a snapshot back out of storage — so with no storage
+     * configured, `respondToToolApproval` produces
+     * `AGENT_RESUME_NO_SNAPSHOT_FOUND`, the turn ends `reason: 'error'`, and
+     * the tool never runs. Every tool call failed that way, and the failure
+     * looked like a model that answered nothing.
+     *
+     * A file path here makes threads survive the process, which is what a
+     * cross-run `--resume` would need. In-memory is the default because
+     * inventing a data directory in someone's home is a decision for the
+     * owner, not a side effect of fixing approvals.
+     */
+    dbUrl?: string;
+};
+
+/**
+ * Our tools in Mastra's shape.
+ *
+ * The translation is the whole reason `tools.ts` is vendor-neutral: the tools
+ * are the most valuable thing in a coding agent and the least worth rewriting
+ * when the runtime is replaced, so they are defined against our own type and
+ * adapted here, below the seam, in eight lines.
+ *
+ * `execute` takes the parsed input directly in Mastra v1 — not the older
+ * `{ context }` wrapper — and our `run` already returns a string for both
+ * success and failure, so there is nothing to catch here.
+ */
+function mastraTools(tools: HarnessTool[]): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const tool of tools) {
+        out[tool.name] = createTool({
+            id: tool.name,
+            description: tool.description,
+            inputSchema: tool.schema,
+            execute: async (input: unknown) => tool.run((input ?? {}) as Record<string, unknown>),
+        });
+    }
+    return out;
+}
 
 const DEFAULT_INSTRUCTIONS =
     'You are Genie TUI, a first-party coding agent running inside Genie. Be concise.';
@@ -59,7 +105,7 @@ const DEFAULT_INSTRUCTIONS =
  * notice, and the agent's NAME says `(offline)` — a skeleton silently posing as
  * a working coding agent is worse than one that admits it cannot answer.
  */
-function agentFor(model: ModelSpec, instructions: string): Agent {
+export function agentFor(model: ModelSpec, instructions: string, tools: HarnessTool[] = []): Agent {
     if (model.kind === 'invalid') {
         // Unreachable from the CLI, which reports and exits first. Throwing
         // rather than falling back keeps a misconfiguration from quietly
@@ -73,6 +119,11 @@ function agentFor(model: ModelSpec, instructions: string): Agent {
             name: 'genie-tui (offline)',
             instructions: 'Offline skeleton.',
             model: offlineModel(model.notice) as never,
+            // Tools regardless of which model is chosen. The model decides
+            // whether to CALL a tool; it must not decide which tools exist, or
+            // the agent's capabilities silently change with its configuration
+            // and every tool test still passes.
+            tools: mastraTools(tools) as never,
         });
     }
 
@@ -81,6 +132,7 @@ function agentFor(model: ModelSpec, instructions: string): Agent {
         name: 'genie-tui',
         instructions,
         model: (model.url ? { id: model.id, url: model.url } : model.id) as never,
+        tools: mastraTools(tools) as never,
     });
 }
 
@@ -88,13 +140,19 @@ export function mastraRuntime(config: MastraRuntimeConfig): Runtime {
     const agent =
         'agent' in config
             ? config.agent
-            : agentFor(config.model, config.instructions ?? DEFAULT_INSTRUCTIONS);
+            : agentFor(config.model, config.instructions ?? DEFAULT_INSTRUCTIONS, config.tools);
 
     return {
         async createSession(options: RuntimeSessionOptions): Promise<RuntimeSession> {
             const controller = new AgentController({
                 id: `genie-tui:${options.name}`,
                 agent,
+                // See `dbUrl` above: without storage the approval gate cannot
+                // be released and every tool call dies on resume.
+                storage: new LibSQLStore({
+                    id: 'genie-tui',
+                    url: config.dbUrl ?? ':memory:',
+                }) as never,
                 modes: [{ id: 'build', name: 'Build', metadata: { default: true } }],
             });
             await controller.init();
@@ -122,6 +180,18 @@ export function mastraRuntime(config: MastraRuntimeConfig): Runtime {
                 },
                 interrupt() {
                     session.abort();
+                },
+                /**
+                 * `AgentController` parks the run on a promise when a tool is
+                 * gated and releases it here. Mastra calls the negative case
+                 * `decline`; the protocol calls it `deny`, and this is the one
+                 * place the two vocabularies meet.
+                 */
+                respondToApproval(id, decision) {
+                    session.respondToToolApproval({
+                        decision: decision === 'approve' ? 'approve' : 'decline',
+                        toolCallId: id,
+                    });
                 },
                 subscribe(fn) {
                     listeners.add(fn);

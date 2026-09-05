@@ -137,3 +137,84 @@ describe('what it deliberately ignores', () => {
         expect(at({ type: 'agent_start' })).toEqual([{ kind: 'turn-start' }]);
     });
 });
+
+describe('messages that carry no text', () => {
+    /**
+     * Mastra emits a `message_end` for the assistant message that HOLDS a tool
+     * invocation. Its content is a `tool-invocation` part and nothing else, so
+     * flattening it to text gives an empty string — and committing that painted
+     * a blank agent bubble in the transcript for every single tool call.
+     *
+     * Measured against a real controller, not imagined: a one-tool turn produced
+     * a transcript of `["what does hello.txt say?", "", ""]`. The tool call is
+     * already represented by its own tool card, so the right answer is to emit
+     * nothing at all.
+     */
+    it('drops an assistant message that is only a tool invocation', () => {
+        expect(
+            at({
+                type: 'message_end',
+                message: {
+                    id: 'm1',
+                    role: 'assistant',
+                    content: {
+                        format: 2,
+                        parts: [
+                            {
+                                type: 'tool-invocation',
+                                toolInvocation: {
+                                    state: 'call',
+                                    toolCallId: 'call_1',
+                                    toolName: 'read_file',
+                                    args: {},
+                                },
+                            },
+                        ],
+                    },
+                } as never,
+            }),
+        ).toEqual([]);
+    });
+
+    /**
+     * Mastra wraps the USER's own message in a `signal` role with a
+     * `data-user-message` part. The harness already committed that text when the
+     * composer submitted it, so echoing it back — as an `agent` message, because
+     * `signal` is not a role the protocol has — is both a duplicate and wrongly
+     * attributed.
+     */
+    it('drops the signal envelope Mastra wraps the user message in', () => {
+        expect(
+            at({
+                type: 'message_end',
+                message: {
+                    id: 'm2',
+                    role: 'signal',
+                    content: {
+                        format: 2,
+                        parts: [{ type: 'data-user-message', data: { contents: 'hello' } }],
+                    },
+                } as never,
+            }),
+        ).toEqual([]);
+    });
+
+    /**
+     * The positive control. "Emits nothing" is also what a completely broken
+     * adapter does, so a message that DOES carry text must still come through.
+     */
+    it('still emits a message that has text', () => {
+        expect(
+            at({
+                type: 'message_end',
+                message: {
+                    id: 'm3',
+                    role: 'assistant',
+                    content: { format: 2, parts: [{ type: 'text', text: 'The file says 42.' }] },
+                } as never,
+            }),
+        ).toEqual([
+            { kind: 'message', id: 'm3', role: 'agent', content: 'The file says 42.', done: true },
+        ]);
+    });
+});

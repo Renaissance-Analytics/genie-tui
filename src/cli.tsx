@@ -10,6 +10,7 @@ import { createHarness } from './harness.js';
 import { mastraRuntime } from './runtime/mastra.js';
 import { resolveModel } from './model.js';
 import { harnessSurfaces, SURFACE_IDS } from './surfaces.js';
+import { autoApprovePolicy, harnessTools, toolNames } from './tools.js';
 import type { Harness } from './harness.js';
 import type { HarnessState } from './protocol.js';
 
@@ -59,8 +60,12 @@ Options
   --model <id>           Model id. Default: $GENIE_TUI_MODEL
   --model-url <url>      OpenAI-compatible base URL — an Ollama, llama.cpp,
                          LM Studio or vLLM server. Default: $GENIE_TUI_MODEL_URL
-  --print                Boot, report the surfaces as JSON, exit. No terminal
-                         required, so it is also the health check.
+  --yes                  Approve every tool call without asking. For unattended
+                         runs only; the default stops and asks before any change
+                         to the workspace. Nothing reaches outside the working
+                         directory either way.
+  --print                Boot, report the surfaces and tools as JSON, exit. No
+                         terminal required, so it is also the health check.
   --version              Print the version
   --help                 This
 
@@ -137,15 +142,26 @@ async function main(): Promise<void> {
         process.exit(2);
     }
 
+    // The workspace is the process's cwd — Genie launches the terminal there,
+    // so the agent's reach is the same folder the human is looking at.
+    const tools = harnessTools({ cwd: process.cwd() });
+
+    // Read freely, ask before changing anything. `--yes` collapses that to
+    // "approve everything", which is a real need for an unattended run and a
+    // terrible default: the gate is the only thing standing between a model's
+    // guess and the user's files.
+    const autoApprove = flag('--yes') ? () => true : autoApprovePolicy(tools);
+
     const harness = await createHarness({
         name,
         cwd: process.cwd(),
         sessionId,
+        autoApprove,
         // The ONE place a runtime is chosen, and the entry point states only
         // WHAT it wants to talk to. Swapping Mastra out is a change in
         // runtime/mastra.ts and this one line — which is why no vendor is
         // imported anywhere in this file.
-        runtime: mastraRuntime({ model }),
+        runtime: mastraRuntime({ model, tools }),
     });
 
     // The Human+ registry: the same surfaces Genie reads are the ones any
@@ -169,6 +185,7 @@ async function main(): Promise<void> {
             offline: model.kind === 'offline',
             model: model.kind === 'remote' ? { id: model.id, url: model.url ?? null } : null,
             bridge: bridge.enabled,
+            tools: toolNames(tools),
             surfaces: registry.list().map((s) => s.id),
             session: registry.get(SURFACE_IDS.session)?.read(),
             turn: registry.get(SURFACE_IDS.turn)?.read(),

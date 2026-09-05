@@ -78,7 +78,14 @@ function start(args: string[]): Running {
     return {
         child,
         output: () => buffer,
-        async waitFor(needle: string, ms = 20_000): Promise<void> {
+        /**
+         * Generous on purpose. Each of these spawns a real node process that
+         * boots React, Ink and a Mastra `AgentController`, and the suite runs it
+         * alongside seventeen other files doing their own work. A tight bound
+         * here measures the runner's load, not the binary — it failed once in a
+         * full run for exactly that reason while passing alone.
+         */
+        async waitFor(needle: string, ms = 45_000): Promise<void> {
             const deadline = Date.now() + ms;
             while (Date.now() < deadline) {
                 if (plain(buffer).includes(needle)) return;

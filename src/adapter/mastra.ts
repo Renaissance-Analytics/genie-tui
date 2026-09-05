@@ -25,10 +25,10 @@ export function fromMastra(event: AgentControllerEvent): HarnessEvent[] {
             return [{ kind: 'turn-end', reason: event.reason ?? 'complete' }];
 
         case 'message_update':
-            return [message(event.message, false)];
+            return textOnly(message(event.message, false));
 
         case 'message_end':
-            return [message(event.message, true)];
+            return textOnly(message(event.message, true));
 
         case 'tool_start':
             return [{ kind: 'tool-start', id: event.toolCallId, name: event.toolName }];
@@ -55,6 +55,25 @@ export function fromMastra(event: AgentControllerEvent): HarnessEvent[] {
             // omission, so adding a case is a decision.
             return [];
     }
+}
+
+/**
+ * Emit a message only when it actually says something.
+ *
+ * Mastra sends a `message_end` for every assistant message that HOLDS a tool
+ * invocation, and wraps the user's own message in a `signal` envelope. Neither
+ * carries a text part, so both flatten to the empty string — and committing
+ * those painted a blank agent bubble in the transcript for every tool call,
+ * plus a duplicate of the user's message misattributed to the agent. Measured
+ * against a real controller: one tool call produced a transcript of
+ * `["what does hello.txt say?", "", ""]`.
+ *
+ * The tool call already has its own card and the user's message was committed
+ * when the composer submitted it, so there is nothing left to show.
+ */
+function textOnly(event: HarnessEvent): HarnessEvent[] {
+    if (event.kind === 'message' && event.content === '') return [];
+    return [event];
 }
 
 /** Mastra's message roles, in the harness's vocabulary. */

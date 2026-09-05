@@ -26,6 +26,8 @@ const noopActions = {
     submit: vi.fn(),
     clear: vi.fn(),
     interrupt: vi.fn(),
+        approve: vi.fn(),
+        deny: vi.fn(),
 };
 
 describe('surface registration', () => {
