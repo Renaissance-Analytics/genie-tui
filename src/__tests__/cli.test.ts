@@ -132,6 +132,37 @@ describe('the built binary answers the questions a person asks first', () => {
     });
 
     /**
+     * `--yes` changes who decides whether the agent may write to your files, so
+     * it is reported and asserted rather than trusted. A permission-affecting
+     * flag with no test is the kind of thing that silently stops working.
+     *
+     * `--print` names the policy for the same reason: "what is this agent
+     * allowed to do without asking me" should be answerable without starting a
+     * turn.
+     */
+    it('asks before changing the workspace, and says so', () => {
+        const run = spawnSync(process.execPath, [cli, '--print', '--name', 'p'], {
+            encoding: 'utf8',
+            env: cleanEnv(),
+            timeout: 120_000,
+        });
+
+        expect(run.status, run.stderr).toBe(0);
+        expect((JSON.parse(run.stdout) as { approval: string }).approval).toBe('ask-before-changes');
+    }, 150_000);
+
+    it('approves everything under --yes', () => {
+        const run = spawnSync(process.execPath, [cli, '--print', '--name', 'p', '--yes'], {
+            encoding: 'utf8',
+            env: cleanEnv(),
+            timeout: 120_000,
+        });
+
+        expect(run.status, run.stderr).toBe(0);
+        expect((JSON.parse(run.stdout) as { approval: string }).approval).toBe('all');
+    }, 150_000);
+
+    /**
      * Without a TTY, Ink throws from inside a React effect and the user gets
      * twenty lines of react-reconciler stack. That is indistinguishable from a
      * broken install, which is precisely the wrong impression for this binary

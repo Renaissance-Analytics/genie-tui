@@ -150,7 +150,8 @@ async function main(): Promise<void> {
     // "approve everything", which is a real need for an unattended run and a
     // terrible default: the gate is the only thing standing between a model's
     // guess and the user's files.
-    const autoApprove = flag('--yes') ? () => true : autoApprovePolicy(tools);
+    const approveEverything = flag('--yes');
+    const autoApprove = approveEverything ? () => true : autoApprovePolicy(tools);
 
     const harness = await createHarness({
         name,
@@ -186,6 +187,10 @@ async function main(): Promise<void> {
             model: model.kind === 'remote' ? { id: model.id, url: model.url ?? null } : null,
             bridge: bridge.enabled,
             tools: toolNames(tools),
+            // What this agent may do WITHOUT asking. Reported because it is the
+            // one question an operator should be able to answer about an agent
+            // without starting a turn and finding out.
+            approval: approveEverything ? 'all' : 'ask-before-changes',
             surfaces: registry.list().map((s) => s.id),
             session: registry.get(SURFACE_IDS.session)?.read(),
             turn: registry.get(SURFACE_IDS.turn)?.read(),
