@@ -40,6 +40,21 @@ function cleanEnv(): NodeJS.ProcessEnv {
         'ANTHROPIC_API_KEY',
         'OPENAI_API_KEY',
         'GOOGLE_GENERATIVE_AI_API_KEY',
+        // `CI` and `CONTINUOUS_INTEGRATION` are removed for the CHILD, and this
+        // is load-bearing rather than tidiness.
+        //
+        // Ink decides whether to render live at all with
+        // `interactive ?? (!isInCi && Boolean(stdout.isTTY))` (ink/build/ink.js),
+        // and `is-in-ci` is nothing but a read of these two variables. In CI mode
+        // it buffers every frame and paints once, on unmount — so the child
+        // produced NO output at all, every assertion timed out, and all six
+        // matrix jobs failed while the same test passed locally.
+        //
+        // The child is not "running in CI" in the sense Ink means: it is the
+        // subject under test, simulating an interactive terminal. Inheriting the
+        // runner's CI flag makes it simulate the one thing the test is not about.
+        'CI',
+        'CONTINUOUS_INTEGRATION',
     ]) {
         delete env[key];
     }

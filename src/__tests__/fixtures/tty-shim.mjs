@@ -26,9 +26,15 @@ import url from 'node:url';
 process.stdin.isTTY = true;
 process.stdin.setRawMode = () => process.stdin;
 
-// Ink buffers output and paints only on unmount when stdout is not a TTY (it
-// treats that as CI). Live frames are the point here, so say it is one, at a
-// fixed width so wrapped assertions are reproducible across machines.
+// Ink renders live only when `!isInCi && stdout.isTTY` — otherwise it buffers
+// every frame and paints once, on unmount. Live frames are the point here, so
+// say this is a TTY, at a fixed width so wrapped assertions are reproducible
+// across machines.
+//
+// `isTTY` alone is not enough: `isInCi` is a read of the `CI` /
+// `CONTINUOUS_INTEGRATION` environment variables, which the test strips from
+// this process's environment before spawning it. Both halves are required, and
+// the missing half failed all six CI jobs while passing on every desktop.
 process.stdout.isTTY = true;
 process.stdout.columns = 100;
 process.stdout.rows = 30;
