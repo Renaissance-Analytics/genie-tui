@@ -4,9 +4,17 @@ A first-party coding-agent harness for Genie — a third **provider** alongside
 Claude Code and Codex, built on **Mastra** for the agent runtime and
 **`@particle-academy/fancy-tui`** for the terminal surface.
 
-**Status: walking skeleton.** It boots, runs a real Mastra turn, renders, and
-reports itself. It is not yet a usable coding agent — there are no file or shell
-tools, and nothing persists. See [`GAPS.md`](GAPS.md).
+**Status: it builds, installs and works as a coding agent.** It reads, lists
+and searches a workspace, writes files with your approval, and declares its
+state instead of being sniffed. It does not run shell commands, and nothing
+persists between runs. See [`GAPS.md`](GAPS.md) for the rest.
+
+For ten releases it did neither of the first two: `bin` pointed at
+`./dist/cli.js` and no script produced `dist/`, so there was nothing to install
+— and the first frame it painted in a terminal was also its last, because two
+Human+ surfaces registered under the same id and the registry throws on
+duplicates. Both are fixed, and both now have the test that would have caught
+them.
 
 Design: [`.ai/_discovery/genie-native-tui.md`](../../_discovery/genie-native-tui.md).
 
@@ -76,15 +84,58 @@ carried — **runtime** model switching to a local endpoint needs a custom
 
 ```bash
 npm install
-npm test          # 72 tests
+npm run build     # produces dist/, which `bin` points at
+npm test          # 130 tests; builds first, so the artifact under test is current
 npm run typecheck
 
-npx tsx src/cli.tsx --print                      # non-interactive smoke
-npx tsx src/cli.tsx --session-id <uuid> --name x # the TUI
+node dist/cli.js --help
+node dist/cli.js --print        # boot, report surfaces + tools as JSON, exit
+node dist/cli.js                # the TUI (needs a real terminal)
 ```
 
-With no `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`, …) it runs against
-`offline-model.ts` and says so, rather than pretending to be a coding agent.
+The binary is **`genie`**, matching `TUI_REGISTRY.genie.defaultCommand` in
+Genie. It was `genie-tui` here for long enough that Genie had to fix the
+mismatch on its own side after `bash: genie-tui: command not found`.
+
+`npm test` builds before it runs. That is deliberate: a suite that asserts on a
+`dist/` somebody left behind can pass against code that no longer exists.
+
+### Which model
+
+Local first, cloud as the fallback, decided in `model.ts` and asserted in
+`model.test.ts` — a configured local endpoint wins even when a cloud key is
+also present, and it needs no credential.
+
+```bash
+node dist/cli.js --model-url http://127.0.0.1:11434/v1 --model qwen3-coder
+```
+
+That object form is the only one that can carry a URL, and it is what Ollama,
+llama.cpp, LM Studio and vLLM all speak. A bare model name is namespaced
+`local/` on purpose: Mastra strips `temperature`/`topP`/`topK` for any model
+absent from its hardcoded list, and *absent* means unlisted rather than
+unsupported — so a provider id its registry recognises silently discards your
+sampling config.
+
+With no endpoint and no key it runs against `offline-model.ts` and says so,
+rather than pretending to be a coding agent.
+
+## Tools, and who says yes
+
+`read_file`, `list_dir`, `search_files`, `write_file`. Every path is resolved
+against the working directory **and realpathed**, so a symlink that sits inside
+the workspace and points at `/etc` is refused — a prefix check cannot see that
+one. Output is capped and says when it truncated, because the target is local
+models where 8k context is common.
+
+Reading is free. Anything that changes the workspace stops and asks, showing the
+arguments — `y` approves, `n` declines. `--yes` approves everything, for
+unattended runs.
+
+Every tool is offered to the model, including `write_file`. Hiding it would be a
+permission model the human never participates in: a model that cannot see the
+tool cannot ask, so the agent just seems unable rather than asking to be
+allowed.
 
 ## How Genie would launch it
 
@@ -92,12 +143,12 @@ Exactly as it launches the other two — a command in a pty, with `GENIE_MCP_URL
 and `GENIE_TERMINAL_ID` already in the environment:
 
 ```
-genie-tui --session-id <uuid> --name <agent-name>
+genie --session-id <uuid> --name <agent-name>
 ```
 
-Provider id `genie`, `LAUNCH_PROFILES` entry
-`{ strategy: 'flag', flagTemplate: '--session-id {id}' }` — so the chat-id binds
-**at launch** and becomes the Mastra thread id. Codex's late-binding path exists
+Provider id `genie`, which now exists in Genie's `TUI_REGISTRY` with
+`defaultCommand: 'genie'` — so the chat-id binds **at launch** and becomes the
+Mastra thread id. Codex's late-binding path exists
 because its session id is unknowable before its harness runs; being first-party,
 this takes the easy path deliberately.
 
@@ -123,3 +174,26 @@ implement. Two of these are the design argument written as assertions —
 embedding claim is checked rather than believed. `bridge.test.ts` runs over real
 HTTP against a stub endpoint, because the JSON-RPC frame *is* the deliverable and
 a mock would let a wrong one pass.
+
+Three of them exist because of what they caught:
+
+- `dist.test.ts` asserts on the ARTIFACT — a build script exists, the bin is
+  named `genie`, and `npm pack --dry-run` actually CONTAINS `dist/cli.js`. That
+  last one is a separate failure mode: `dist/` is gitignored, npm falls back to
+  `.gitignore` when there is no `files` array, so a correct build could still
+  ship a tarball with no entry point in it.
+- `cli.test.ts` EXECUTES the built file and drives it — paints, takes typed
+  characters, submits, completes a turn, exits on Ctrl-C. A build that exits 0
+  and has never been run is the assumption that created this repository's
+  situation.
+- `composition.test.tsx` mounts what the CLI mounts, provider and all.
+  `app.test.tsx` renders `App` with no `TuiSurfaceProvider`, which makes every
+  `fancy-tui` component's surface registration a silent no-op — so the id
+  collision that killed the app on mount was invisible to it. A component test
+  that omits the provider is testing a different program from the one that
+  ships.
+
+`tool-turn.test.ts` is the one worth copying: it stands up an OpenAI-compatible
+server that asks for a tool, then asserts the SERVER was sent the file's real
+contents back. Without that control, the canned answer would pass against a tool
+that never touched the disk.
