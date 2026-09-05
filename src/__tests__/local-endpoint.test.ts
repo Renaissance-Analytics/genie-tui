@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Agent } from '@mastra/core/agent';
 
 import { createHarness } from '../harness.js';
 import { mastraRuntime } from '../runtime/mastra.js';
+import type { ModelSpec } from '../model.js';
 
 /**
  * The LOCAL-MODEL path, proved end to end against a real HTTP server.
@@ -100,16 +100,19 @@ afterEach(async () => {
     await new Promise<void>((r) => server.close(() => r()));
 });
 
-function localAgent(url: string): Agent {
-    return new Agent({
-        id: 'local',
-        name: 'Local',
-        instructions: 'You are running on the user’s own hardware.',
-        // The object form. A bare `'local/test-model'` string cannot carry a URL,
-        // which is exactly the limitation that forces a custom gateway for
-        // RUNTIME model switching.
-        model: { id: 'local/test-model', url } as never,
-    });
+/**
+ * The PRODUCTION path, not a hand-built agent.
+ *
+ * This used to construct the `Agent` here with the object form inline, which
+ * proved Mastra could reach a URL but said nothing about whether the TUI's own
+ * resolution ever produces one. Going through `ModelSpec` -> `mastraRuntime`
+ * means a regression anywhere between `--model-url` and the wire fails here.
+ */
+function localModel(url: string): ModelSpec {
+    // `local/`, not `lmstudio/`: an id Mastra's registry does not recognise is
+    // the one that keeps `temperature`/`topP`/`topK` from being silently
+    // stripped. See `model.ts`.
+    return { kind: 'remote', id: 'local/test-model', url };
 }
 
 describe('a locally hosted OpenAI-compatible model', () => {
@@ -117,7 +120,7 @@ describe('a locally hosted OpenAI-compatible model', () => {
         const harness = await createHarness({
             name: 'local',
             cwd: process.cwd(),
-            runtime: mastraRuntime({ agent: localAgent(baseUrl) }),
+            runtime: mastraRuntime({ model: localModel(baseUrl) }),
             sessionId: 'local-1',
         });
 
@@ -145,7 +148,7 @@ describe('a locally hosted OpenAI-compatible model', () => {
         const harness = await createHarness({
             name: 'local',
             cwd: process.cwd(),
-            runtime: mastraRuntime({ agent: localAgent(baseUrl) }),
+            runtime: mastraRuntime({ model: localModel(baseUrl) }),
             sessionId: 'local-2',
         });
         await harness.send('hi');
@@ -168,7 +171,7 @@ describe('a locally hosted OpenAI-compatible model', () => {
             name: 'local',
             cwd: process.cwd(),
             // Port 1 is reserved and never listening.
-            runtime: mastraRuntime({ agent: localAgent('http://127.0.0.1:1/v1') }),
+            runtime: mastraRuntime({ model: localModel('http://127.0.0.1:1/v1') }),
             sessionId: 'local-3',
         });
 

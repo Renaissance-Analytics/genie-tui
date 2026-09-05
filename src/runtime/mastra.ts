@@ -1,8 +1,10 @@
+import { Agent } from '@mastra/core/agent';
 import { AgentController } from '@mastra/core/agent-controller';
-import type { Agent } from '@mastra/core/agent';
 import type { AgentControllerEvent, Session } from '@mastra/core/agent-controller';
 
 import { fromMastra } from '../adapter/mastra.js';
+import { offlineModel } from '../offline-model.js';
+import type { ModelSpec } from '../model.js';
 import type { Runtime, RuntimeSession, RuntimeSessionOptions } from '../runtime.js';
 
 /**
@@ -27,12 +29,72 @@ import type { Runtime, RuntimeSession, RuntimeSessionOptions } from '../runtime.
  * is why the TUI embeds it directly instead of running `mastra dev` and talking
  * to a local server.
  */
-export function mastraRuntime(config: { agent: Agent }): Runtime {
+/**
+ * Either describe the model and let this file build the agent, or hand one over.
+ *
+ * The `model` form is what the CLI uses, and it is why `cli.tsx` no longer
+ * imports Mastra at all: the entry point states WHAT it wants to talk to and
+ * this file — the one written to be deleted — decides how.
+ *
+ * The `agent` form exists for tests that must inject a bespoke language model,
+ * which a {@link ModelSpec} deliberately cannot express: `harness.test.ts` drives
+ * a real controller with Mastra's own mock, and describing that as data would
+ * mean widening the spec to carry a vendor object, which is exactly the leak
+ * this seam prevents.
+ */
+export type MastraRuntimeConfig = { agent: Agent } | { model: ModelSpec; instructions?: string };
+
+const DEFAULT_INSTRUCTIONS =
+    'You are Genie TUI, a first-party coding agent running inside Genie. Be concise.';
+
+/**
+ * A {@link ModelSpec} into a Mastra `Agent`.
+ *
+ * The object form `{ id, url }` is the ONLY way to reach a local endpoint:
+ * `url` short-circuits Mastra's gateway/auth chain and defaults the API key to
+ * empty, so a keyless Ollama or llama.cpp server just works. The string form
+ * goes through the router and its auto-detected provider keys.
+ *
+ * An offline spec becomes a hand-written AI SDK model that answers with the
+ * notice, and the agent's NAME says `(offline)` — a skeleton silently posing as
+ * a working coding agent is worse than one that admits it cannot answer.
+ */
+function agentFor(model: ModelSpec, instructions: string): Agent {
+    if (model.kind === 'invalid') {
+        // Unreachable from the CLI, which reports and exits first. Throwing
+        // rather than falling back keeps a misconfiguration from quietly
+        // becoming a different, working configuration.
+        throw new Error(model.reason);
+    }
+
+    if (model.kind === 'offline') {
+        return new Agent({
+            id: 'genie-tui',
+            name: 'genie-tui (offline)',
+            instructions: 'Offline skeleton.',
+            model: offlineModel(model.notice) as never,
+        });
+    }
+
+    return new Agent({
+        id: 'genie-tui',
+        name: 'genie-tui',
+        instructions,
+        model: (model.url ? { id: model.id, url: model.url } : model.id) as never,
+    });
+}
+
+export function mastraRuntime(config: MastraRuntimeConfig): Runtime {
+    const agent =
+        'agent' in config
+            ? config.agent
+            : agentFor(config.model, config.instructions ?? DEFAULT_INSTRUCTIONS);
+
     return {
         async createSession(options: RuntimeSessionOptions): Promise<RuntimeSession> {
             const controller = new AgentController({
                 id: `genie-tui:${options.name}`,
-                agent: config.agent,
+                agent,
                 modes: [{ id: 'build', name: 'Build', metadata: { default: true } }],
             });
             await controller.init();

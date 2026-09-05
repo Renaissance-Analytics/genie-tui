@@ -131,8 +131,20 @@ describe('the seam holds, as source', () => {
         'harness.ts',
         'runtime.ts',
         'surfaces.ts',
+        'model.ts',
         'bridge/genie.ts',
         'ui/App.tsx',
+        // The ENTRY POINT, and the last leak to be closed.
+        //
+        // GAPS H2 recorded that Mastra was imported by three production files
+        // rather than the one the README claimed. Two were fixed; `cli.tsx` was
+        // left constructing `new Agent(...)` itself, so the very first file
+        // anyone reads still opened with a vendor import, and swapping the
+        // runtime would have meant editing the program's front door. The agent
+        // is now built inside `runtime/mastra.ts` from a vendor-neutral
+        // `ModelSpec`, which is what makes "one new file implementing Runtime"
+        // literally true.
+        'cli.tsx',
     ];
 
     for (const rel of ABOVE_THE_SEAM) {

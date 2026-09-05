@@ -2,14 +2,13 @@
 import fs from 'node:fs';
 import React, { useEffect, useState } from 'react';
 import { render } from 'ink';
-import { Agent } from '@mastra/core/agent';
 import { TuiSurfaceProvider, createTuiSurfaceRegistry } from '@particle-academy/fancy-tui';
 
 import { App } from './ui/App.js';
 import { createGenieBridge } from './bridge/genie.js';
-import { offlineModel } from './offline-model.js';
 import { createHarness } from './harness.js';
 import { mastraRuntime } from './runtime/mastra.js';
+import { resolveModel } from './model.js';
 import { harnessSurfaces, SURFACE_IDS } from './surfaces.js';
 import type { Harness } from './harness.js';
 import type { HarnessState } from './protocol.js';
@@ -70,47 +69,6 @@ Environment (set by Genie when it launches the terminal)
   GENIE_TERMINAL_ID      The terminal this agent is running in
 `;
 
-/**
- * Mastra resolves models through its router, keyed off auto-detected provider
- * env vars. With no key there is nothing to talk to, so the skeleton falls back
- * to Mastra's own mock model and SAYS SO in the agent's name — a walking
- * skeleton that silently pretended to be a coding agent would be worse than one
- * that cannot answer.
- */
-function buildAgent(): { agent: Agent; offline: boolean } {
-    const model = process.env['GENIE_TUI_MODEL'] ?? 'anthropic/claude-sonnet-4-6';
-    const hasKey = Boolean(
-        process.env['ANTHROPIC_API_KEY'] ??
-            process.env['OPENAI_API_KEY'] ??
-            process.env['GOOGLE_GENERATIVE_AI_API_KEY'],
-    );
-
-    if (!hasKey) {
-        return {
-            offline: true,
-            agent: new Agent({
-                id: 'genie-tui',
-                name: 'genie-tui (offline)',
-                instructions: 'Offline skeleton.',
-                model: offlineModel(
-                    'No API key set — this is the offline skeleton. Set ANTHROPIC_API_KEY to talk to a model.',
-                ) as never,
-            }),
-        };
-    }
-
-    return {
-        offline: false,
-        agent: new Agent({
-            id: 'genie-tui',
-            name: 'genie-tui',
-            instructions:
-                'You are Genie TUI, a first-party coding agent running inside Genie. Be concise.',
-            model,
-        }),
-    };
-}
-
 function Root({ harness }: { harness: Harness }): React.JSX.Element {
     const [state, setState] = useState<HarnessState>(harness.state());
     useEffect(() => harness.subscribe(setState), [harness]);
@@ -168,15 +126,26 @@ async function main(): Promise<void> {
 
     const sessionId = arg('session-id') ?? crypto.randomUUID();
     const name = arg('name') ?? 'genie';
-    const { agent, offline } = buildAgent();
+
+    const model = resolveModel({
+        model: arg('model'),
+        modelUrl: arg('model-url'),
+        env: process.env,
+    });
+    if (model.kind === 'invalid') {
+        process.stderr.write(`genie: ${model.reason}\n`);
+        process.exit(2);
+    }
 
     const harness = await createHarness({
         name,
         cwd: process.cwd(),
         sessionId,
-        // The ONE place a runtime is chosen. Swapping Mastra out is a change
-        // here and in runtime/mastra.ts, nowhere else.
-        runtime: mastraRuntime({ agent }),
+        // The ONE place a runtime is chosen, and the entry point states only
+        // WHAT it wants to talk to. Swapping Mastra out is a change in
+        // runtime/mastra.ts and this one line — which is why no vendor is
+        // imported anywhere in this file.
+        runtime: mastraRuntime({ model }),
     });
 
     // The Human+ registry: the same surfaces Genie reads are the ones any
@@ -197,7 +166,8 @@ async function main(): Promise<void> {
         // Non-interactive smoke, for CI and for `--print`: prove the stack boots
         // and the surfaces answer, without needing a TTY.
         const out = {
-            offline,
+            offline: model.kind === 'offline',
+            model: model.kind === 'remote' ? { id: model.id, url: model.url ?? null } : null,
             bridge: bridge.enabled,
             surfaces: registry.list().map((s) => s.id),
             session: registry.get(SURFACE_IDS.session)?.read(),
