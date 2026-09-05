@@ -171,6 +171,18 @@ describe('the built binary runs as a terminal application', () => {
         // 1. It painted. The header carries the agent name.
         await run.waitFor('e2e');
 
+        // 1b. It is FOCUSED. This is a real readiness signal, not a pause.
+        //
+        // The first frame is painted before the composer takes focus, and
+        // `MultilineInput` drops every keypress while unfocused
+        // (`if (!isFocused) return`). Typing into that window loses the
+        // keystrokes silently — which is exactly how this test failed
+        // intermittently, on a frame showing an empty but now-focused composer.
+        //
+        // The `▌` cursor is only rendered once focus lands, so waiting for it
+        // waits for the actual precondition instead of guessing at a delay.
+        await run.waitFor('▌');
+
         // 2. It is listening. Typed characters reach the controlled composer
         //    and come back out in the next frame — the composer state Genie is
         //    told about is the same state on screen, which is the entire claim.

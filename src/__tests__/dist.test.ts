@@ -118,7 +118,10 @@ describe('the package produces an installable binary', () => {
         expect(files, `npm pack shipped ${files.length} files, none of them ${wanted}`).toContain(
             wanted,
         );
-    });
+        // `npm pack` spawns npm, which on Windows means a `.cmd` shim through a
+        // shell and several seconds of work — well past vitest's 5s default,
+        // and more when seventeen other files are running beside it.
+    }, 120_000);
 
     /**
      * The assertion the whole file is for: the built artifact is EXECUTED, in a
