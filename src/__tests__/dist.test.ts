@@ -108,7 +108,15 @@ describe('the package produces an installable binary', () => {
      */
     it('includes the built entry point in the published tarball', () => {
         const { target } = soleBin(readPackageJson());
-        const packed = spawnSync(npm, ['pack', '--dry-run', '--json'], npmOpts);
+        // `--ignore-scripts` is load-bearing, not tidiness. `npm pack` runs the
+        // `prepare` lifecycle, and this package's `prepare` is `npm run build`,
+        // whose `prebuild` DELETES `dist/`. Vitest runs test files in parallel,
+        // so packing without this flag rips the artifact out from under
+        // `cli.test.ts` mid-execution -- "Cannot find module dist/cli.js" from a
+        // suite that builds correctly. The build is already guaranteed by
+        // `vitest.global-setup.ts`; re-running it here is redundant AND
+        // destructive. Measured: this exact race reddened five tests.
+        const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], npmOpts);
         expect(packed.status, packed.stderr).toBe(0);
 
         const manifest = JSON.parse(packed.stdout) as { files: { path: string }[] }[];
