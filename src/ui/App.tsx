@@ -14,6 +14,7 @@ import {
     ToolCall,
 } from '@particle-academy/fancy-tui';
 
+import { SURFACE_IDS } from '../surfaces.js';
 import type { HarnessState } from '../protocol.js';
 import type { HarnessActions } from '../surfaces.js';
 
@@ -97,8 +98,17 @@ export function App({
                     </Stack>
                 </LiveRegion>
 
+                {/*
+                 * `composer.input`, NOT `composer`. This component registers a
+                 * Human+ surface under whatever `id` it is given, and the
+                 * harness publishes its own `composer` surface — the one
+                 * carrying `busy` and `deliver`. Both under one id is a
+                 * duplicate, and the registry throws on duplicates, so the app
+                 * used to die on mount after painting a single frame. See
+                 * SURFACE_IDS for why these are two surfaces rather than one.
+                 */}
                 <Composer
-                    id="composer"
+                    id={SURFACE_IDS.composerInput}
                     value={composer.text}
                     onChange={onChange}
                     onSubmit={onSubmit}

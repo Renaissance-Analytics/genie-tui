@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import React, { useEffect, useState } from 'react';
 import { render } from 'ink';
 import { Agent } from '@mastra/core/agent';
@@ -9,22 +10,65 @@ import { createGenieBridge } from './bridge/genie.js';
 import { offlineModel } from './offline-model.js';
 import { createHarness } from './harness.js';
 import { mastraRuntime } from './runtime/mastra.js';
-import { harnessSurfaces } from './surfaces.js';
+import { harnessSurfaces, SURFACE_IDS } from './surfaces.js';
 import type { Harness } from './harness.js';
 import type { HarnessState } from './protocol.js';
 
 /**
  * Entry point. Genie spawns this in a pty exactly as it spawns Claude Code or
- * Codex — `genie-tui --session-id <uuid>` — with `GENIE_MCP_URL` and
+ * Codex — `genie --session-id <uuid>` — with `GENIE_MCP_URL` and
  * `GENIE_TERMINAL_ID` already in the environment.
+ *
+ * The binary is `genie`, matching `TUI_REGISTRY.genie.defaultCommand` in Genie
+ * (`main/agents/registry.ts`). It was `genie-tui` on this side for long enough
+ * that Genie had to fix the mismatch on its own, after selecting the provider
+ * produced `bash: genie-tui: command not found`.
  */
 
+/** A flag with a value: `--name x` or `--name=x`. */
 function arg(name: string): string | undefined {
     const i = process.argv.indexOf(`--${name}`);
-    if (i >= 0 && process.argv[i + 1]) return process.argv[i + 1];
+    const next = process.argv[i + 1];
+    if (i >= 0 && next !== undefined && !next.startsWith('-')) return next;
     const inline = process.argv.find((a) => a.startsWith(`--${name}=`));
     return inline?.slice(name.length + 3);
 }
+
+/** A bare flag. Separate from {@link arg} so `--print --name ci` is not read as
+ *  `print === '--name'`. */
+function flag(...names: string[]): boolean {
+    return names.some((n) => process.argv.includes(n));
+}
+
+/** The shipped version, read from the package rather than duplicated in source
+ *  where it would drift on the first release nobody thought about. */
+function version(): string {
+    const pkg = JSON.parse(
+        fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: string };
+    return pkg.version ?? '0.0.0';
+}
+
+const USAGE = `genie — Genie's first-party coding-agent harness
+
+Usage
+  genie [options]
+
+Options
+  --name <name>          Agent name, as Genie addresses it. Default: genie
+  --session-id <id>      Genie chat-id to bind to. Default: a fresh uuid
+  --model <id>           Model id. Default: $GENIE_TUI_MODEL
+  --model-url <url>      OpenAI-compatible base URL — an Ollama, llama.cpp,
+                         LM Studio or vLLM server. Default: $GENIE_TUI_MODEL_URL
+  --print                Boot, report the surfaces as JSON, exit. No terminal
+                         required, so it is also the health check.
+  --version              Print the version
+  --help                 This
+
+Environment (set by Genie when it launches the terminal)
+  GENIE_MCP_URL          Per-terminal MCP endpoint the harness reports to
+  GENIE_TERMINAL_ID      The terminal this agent is running in
+`;
 
 /**
  * Mastra resolves models through its router, keyed off auto-detected provider
@@ -83,7 +127,45 @@ function Root({ harness }: { harness: Harness }): React.JSX.Element {
     );
 }
 
+/**
+ * Refuse to start the interactive UI without a terminal, and say why.
+ *
+ * Ink needs raw mode for `useInput`, and the composer is nothing but input
+ * handling, so a non-TTY stdin cannot work. Left alone, Ink throws from inside a
+ * React effect and the operator gets twenty lines of react-reconciler stack —
+ * indistinguishable from a broken install, which is exactly the wrong
+ * impression for THIS binary to give given its history.
+ *
+ * Requiring a terminal is correct behaviour, not a limitation to paper over.
+ * The fix is to state the requirement in one line and name the flag that works
+ * without one.
+ */
+function requireTerminal(): void {
+    if (process.stdin.isTTY) return;
+    process.stderr.write(
+        'genie: needs an interactive terminal — stdin is not a tty, so there is no way to read keys.\n' +
+            '       Genie launches this in a pty. To run it yourself, start it from a terminal;\n' +
+            '       for a non-interactive check use `genie --print`.\n',
+    );
+    process.exit(1);
+}
+
 async function main(): Promise<void> {
+    if (flag('--help', '-h')) {
+        process.stdout.write(USAGE);
+        return;
+    }
+    if (flag('--version', '-v')) {
+        process.stdout.write(`${version()}\n`);
+        return;
+    }
+
+    const printOnly = flag('--print');
+    // Checked BEFORE the harness is built. Standing up an AgentController and a
+    // session only to discover there is nowhere to draw wastes the startup and
+    // buries the real message under whatever the runtime logs on the way.
+    if (!printOnly) requireTerminal();
+
     const sessionId = arg('session-id') ?? crypto.randomUUID();
     const name = arg('name') ?? 'genie';
     const { agent, offline } = buildAgent();
@@ -111,16 +193,16 @@ async function main(): Promise<void> {
     harness.subscribe((s) => bridge.schedule(s));
     void bridge.report(harness.state());
 
-    if (arg('print') !== undefined || process.argv.includes('--print')) {
+    if (printOnly) {
         // Non-interactive smoke, for CI and for `--print`: prove the stack boots
         // and the surfaces answer, without needing a TTY.
         const out = {
             offline,
             bridge: bridge.enabled,
             surfaces: registry.list().map((s) => s.id),
-            session: registry.get('session')?.read(),
-            turn: registry.get('turn')?.read(),
-            composer: registry.get('composer')?.read(),
+            session: registry.get(SURFACE_IDS.session)?.read(),
+            turn: registry.get(SURFACE_IDS.turn)?.read(),
+            composer: registry.get(SURFACE_IDS.composer)?.read(),
         };
         process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
         await harness.dispose();
@@ -138,6 +220,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-    process.stderr.write(`genie-tui: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`genie: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exitCode = 1;
 });

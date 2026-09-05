@@ -1,0 +1,21 @@
+{
+    // The emitting config. `tsconfig.json` stays `noEmit` because it is the
+    // TYPECHECK config and covers the tests too; a build that also compiled
+    // `__tests__` would ship vitest imports inside the published package.
+    //
+    // tsc rather than a bundler on purpose: this is an npm package with real
+    // dependencies (react, ink, @mastra/core, fancy-tui), and npm installs
+    // those. Bundling them into one file would duplicate what the installer
+    // already does and take React's dual-package hazards on for no gain.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "outDir": "dist",
+        "rootDir": "src",
+        // Source maps so a stack trace out of a pty points at TypeScript.
+        // Cheap, and the alternative is debugging a coding agent from
+        // line numbers in generated JS.
+        "sourceMap": true
+    },
+    "exclude": ["src/**/__tests__/**"]
+}
