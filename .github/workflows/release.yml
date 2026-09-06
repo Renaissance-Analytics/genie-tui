@@ -1,0 +1,107 @@
+name: Release
+
+# Publishes a PACKED TARBALL as a release asset, which is how Genie installs
+# this package.
+#
+# Not a git spec, and not for want of trying: npm cannot install a git spec
+# GLOBALLY when the package has a `prepare` that needs its own dependencies. npm
+# prepares a git dep by cloning it and shelling out to a nested `npm install`
+# inside the clone, and that nested process inherits `npm_config_global` and
+# `npm_config_prefix` from the outer `-g`. The clone's dependencies land in the
+# global prefix, the clone itself never gets a `node_modules/.bin`, and `prepare`
+# then runs a `tsc` that is not there. That is what made this TUI uninstallable
+# (genie#469 has the trace).
+#
+# npm never runs `prepare` on a tarball, because the build already happened here.
+# So the tarball's CONTENTS are the whole contract, and
+# `src/__tests__/package-contents.test.ts` is what holds them.
+
+on:
+    push:
+        tags: ['v*']
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22.13'
+                  cache: npm
+
+            - run: npm ci
+
+            # The gate, before anything is published. `npm test` includes the
+            # packed-contents check, which builds via `prepare` and compares the
+            # tarball against every compiled module on disk — so a tarball that
+            # would install a binary with no modules behind it fails HERE rather
+            # than on a user's machine.
+            - name: Typecheck
+              run: npm run typecheck
+
+            - name: Test
+              run: npm test
+
+            - name: Pack
+              id: pack
+              run: |
+                  file=$(npm pack --silent)
+                  echo "file=$file" >> "$GITHUB_OUTPUT"
+                  echo "Packed $file"
+                  tar -tzf "$file" | head -40
+
+            # Verify the ARTIFACT, not the green jobs above it. A release whose
+            # asset is missing or empty is the failure this repository has
+            # already shipped once.
+            - name: The tarball exists and is not empty
+              run: |
+                  test -s "${{ steps.pack.outputs.file }}"
+                  tar -tzf "${{ steps.pack.outputs.file }}" | grep -q '^package/dist/cli\.js$'
+
+            # THE CHECK THAT ACTUALLY MATTERS: install the tarball the way the
+            # PRODUCT does, with the same `-g --prefix` that broke the git spec,
+            # and run the binary.
+            #
+            # Every step above this one is a weaker question. Listing the tarball
+            # proves a file is inside it, not that npm will place a working
+            # program on PATH — and the bug this whole workflow exists to fix
+            # produced a green build, a real tarball, and an install that died.
+            # A verification that runs a different command from the product is
+            # the fault family that made this TUI uninstallable for ten releases
+            # (genie#469): the git installer WAS verified, with `npm install`
+            # instead of `npm install -g`, and that one missing flag was the bug.
+            #
+            # `--ignore-scripts` is NOT passed, deliberately. If a tarball ever
+            # regains a `prepare`, this must fail here rather than on a user's
+            # machine.
+            - name: Install the tarball globally and run the binary
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  prefix="$(mktemp -d)/global"
+                  npm install -g --prefix "$prefix" "$PWD/${{ steps.pack.outputs.file }}"
+                  # npm puts the shim in <prefix>/bin on POSIX and directly in
+                  # <prefix> on Windows. Found rather than assumed: this ran
+                  # locally on Windows, where `<prefix>/bin/genie` does not exist,
+                  # and hardcoding the POSIX path would have made this step a
+                  # check that only happens to pass on the runner it was written
+                  # for.
+                  shim="$prefix/bin/genie"
+                  [ -x "$shim" ] || shim="$prefix/genie"
+                  test -x "$shim"
+                  "$shim" --version
+
+            - name: Publish the release with the tarball attached
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  gh release create "${{ github.ref_name }}" \
+                    "${{ steps.pack.outputs.file }}" \
+                    --title "${{ github.ref_name }}" \
+                    --generate-notes
