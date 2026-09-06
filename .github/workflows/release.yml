@@ -97,11 +97,32 @@ jobs:
                   test -x "$shim"
                   "$shim" --version
 
-            - name: Publish the release with the tarball attached
+            # A VERSION-LESS ALIAS, beside the versioned tarball.
+            #
+            # Consumers install from `releases/latest/download/<name>`, and that
+            # URL is only stable if the NAME is. `genie-tui-0.1.0.tgz` is not: the
+            # link works until the next release and then 404s IN THE FIELD — for
+            # whoever presses the button, not for whoever wrote it. That is the
+            # exact experience Genie's TUI row has been giving for ten releases.
+            #
+            # Pinning a tag instead only moves the cost: someone must remember to
+            # edit the consumer on every release, and forgetting is silent.
+            #
+            # So each release publishes the same bytes twice — the versioned name,
+            # which is what a human downloads and what an archive should keep, and
+            # `genie-tui.tgz`, which is what a machine resolves and never changes.
+            - name: Name a stable copy for `latest/download`
+              run: |
+                  cp "${{ steps.pack.outputs.file }}" genie-tui.tgz
+                  test -s genie-tui.tgz
+                  cmp "${{ steps.pack.outputs.file }}" genie-tui.tgz
+
+            - name: Publish the release with both tarballs attached
               env:
                   GH_TOKEN: ${{ github.token }}
               run: |
                   gh release create "${{ github.ref_name }}" \
                     "${{ steps.pack.outputs.file }}" \
+                    genie-tui.tgz \
                     --title "${{ github.ref_name }}" \
                     --generate-notes
