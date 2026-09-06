@@ -16,6 +16,14 @@ Human+ surfaces registered under the same id and the registry throws on
 duplicates. Both are fixed, and both now have the test that would have caught
 them.
 
+The runtime underneath is still Mastra. Prism — the replacement this seam was
+built for — now exists as `@particle-academy/prism`, and the swap is blocked on
+one thing: that package cannot currently be installed from anywhere, because a
+git install of it succeeds and then fails to import. Filed upstream as
+[prism-ts#5](https://github.com/Particle-Academy/prism-ts/issues/5); the survey
+behind it, including what the migration will and will not have to build, is
+GAPS.md §P1–P4.
+
 Design: [`.ai/_discovery/genie-native-tui.md`](../../_discovery/genie-native-tui.md).
 
 ## Why this exists

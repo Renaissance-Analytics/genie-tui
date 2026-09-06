@@ -14,6 +14,29 @@
  * LangChain, OpenAI Agents should be plugins behind your interfaces, not your
  * interfaces themselves."* Here it is not a principle, it is a scheduled event.
  *
+ * ## Two things to know before implementing the Prism side
+ *
+ * Both are counterintuitive enough to cost a day, and both are load-bearing for
+ * this project's constraints rather than trivia:
+ *
+ *  - **The local-model provider is `mistral`, not `openai`.** Prism's OpenAI
+ *    provider speaks the Responses API and posts to `/responses`, which Ollama,
+ *    llama.cpp, LM Studio and vLLM do not serve. Its Mistral provider posts to
+ *    `{url}/chat/completions`, takes a custom base URL, and omits the
+ *    `Authorization` header entirely when the key is empty — precisely the
+ *    keyless OpenAI-compatible shape `__tests__/local-endpoint.test.ts` stands a
+ *    real server up to serve. The trap is that the wrong one is the one called
+ *    OpenAI, and picking it makes the local path fail looking like a broken
+ *    server rather than a wrong endpoint.
+ *  - **The tool-execution loop is OURS, over the stream.** Prism refuses a
+ *    tool-call finish on its non-streaming path only; every provider it ships
+ *    emits fully assembled tool calls when streamed. So a Prism `Runtime` owns
+ *    the loop, the step limit and turn termination on failure — it is a
+ *    component to build, not an adapter to write.
+ *
+ * Neither is buildable yet: the package cannot currently be installed at all.
+ * GAPS.md §P1–P4 carries the evidence and the upstream issue.
+ *
  * ## What that buys, concretely
  *
  * Everything above this line — `protocol`, `reduce`, `harness`, `surfaces`,
